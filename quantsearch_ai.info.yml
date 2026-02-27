@@ -1,0 +1,9 @@
+name: 'QuantSearch AI'
+description: 'Integrates Drupal with QuantSearch.ai for AI-powered semantic search and chat widgets.'
+type: module
+package: 'Search'
+core_version_requirement: ^10.3 || ^11 || ^12
+configure: quantsearch_ai.settings_form
+dependencies:
+  - drupal:node
+  - key:key

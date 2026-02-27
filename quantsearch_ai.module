@@ -1,0 +1,228 @@
+<?php
+
+/**
+ * @file
+ * Primary module hooks for QuantSearch AI module.
+ */
+
+use Drupal\Core\Routing\RouteMatchInterface;
+use Drupal\node\NodeInterface;
+
+/**
+ * Implements hook_help().
+ */
+function quantsearch_ai_help($route_name, RouteMatchInterface $route_match) {
+  switch ($route_name) {
+    case 'help.page.quantsearch_ai':
+      $output = '<h3>' . t('About') . '</h3>';
+      $output .= '<p>' . t('The QuantSearch AI module integrates Drupal with <a href="@url">QuantSearch.ai</a> for AI-powered semantic search and chat widgets.', [
+        '@url' => 'https://quantsearch.ai',
+      ]) . '</p>';
+      $output .= '<h3>' . t('Features') . '</h3>';
+      $output .= '<ul>';
+      $output .= '<li>' . t('Semantic search powered by AI embeddings') . '</li>';
+      $output .= '<li>' . t('AI chatbot widget for conversational search') . '</li>';
+      $output .= '<li>' . t('Real-time content indexing on node save') . '</li>';
+      $output .= '<li>' . t('Bulk indexing via Drush commands') . '</li>';
+      $output .= '</ul>';
+      return $output;
+  }
+}
+
+/**
+ * Implements hook_node_insert().
+ */
+function quantsearch_ai_node_insert(NodeInterface $node) {
+  _quantsearch_ai_index_node($node, 'insert');
+}
+
+/**
+ * Implements hook_node_update().
+ */
+function quantsearch_ai_node_update(NodeInterface $node) {
+  $config = \Drupal::config('quantsearch_ai.settings');
+
+  // If node was unpublished, delete from index
+  if (!$node->isPublished() && isset($node->original) && $node->original->isPublished()) {
+    _quantsearch_ai_delete_node($node);
+  }
+  else {
+    _quantsearch_ai_index_node($node, 'update');
+  }
+}
+
+/**
+ * Implements hook_node_delete().
+ */
+function quantsearch_ai_node_delete(NodeInterface $node) {
+  _quantsearch_ai_delete_node($node);
+}
+
+/**
+ * Index a node to QuantSearch.
+ *
+ * @param \Drupal\node\NodeInterface $node
+ *   The node to index.
+ * @param string $operation
+ *   The operation type (insert, update).
+ */
+function _quantsearch_ai_index_node(NodeInterface $node, string $operation) {
+  $config = \Drupal::config('quantsearch_ai.settings');
+
+  // Check if indexing is enabled
+  if (!$config->get('indexing.enabled')) {
+    return;
+  }
+
+  // Check if this content type should be indexed
+  $content_types = $config->get('indexing.content_types') ?: [];
+  if (empty($content_types) || !in_array($node->bundle(), $content_types)) {
+    return;
+  }
+
+  // Check if unpublished should be excluded
+  if ($config->get('indexing.exclude_unpublished') && !$node->isPublished()) {
+    return;
+  }
+
+  // Check if we have a valid connection
+  if (!$config->get('api_key_id') || !$config->get('site_id')) {
+    return;
+  }
+
+  /** @var \Drupal\quantsearch_ai\Service\IndexingService $indexing */
+  $indexing = \Drupal::service('quantsearch_ai.indexing');
+
+  // Real-time or queued indexing
+  if ($config->get('indexing.realtime')) {
+    try {
+      $indexing->indexNode($node);
+    }
+    catch (\Exception $e) {
+      \Drupal::logger('quantsearch_ai')->error('Failed to index node @nid: @message', [
+        '@nid' => $node->id(),
+        '@message' => $e->getMessage(),
+      ]);
+    }
+  }
+  else {
+    // Queue for batch processing
+    $indexing->queueNode($node);
+  }
+}
+
+/**
+ * Delete a node from QuantSearch index.
+ *
+ * @param \Drupal\node\NodeInterface $node
+ *   The node to delete.
+ */
+function _quantsearch_ai_delete_node(NodeInterface $node) {
+  $config = \Drupal::config('quantsearch_ai.settings');
+
+  // Check if we have a valid connection
+  if (!$config->get('api_key_id') || !$config->get('site_id')) {
+    return;
+  }
+
+  /** @var \Drupal\quantsearch_ai\Service\IndexingService $indexing */
+  $indexing = \Drupal::service('quantsearch_ai.indexing');
+
+  try {
+    $indexing->deleteNode($node);
+  }
+  catch (\Exception $e) {
+    \Drupal::logger('quantsearch_ai')->error('Failed to delete node @nid from index: @message', [
+      '@nid' => $node->id(),
+      '@message' => $e->getMessage(),
+    ]);
+  }
+}
+
+/**
+ * Implements hook_page_attachments().
+ */
+function quantsearch_ai_page_attachments(array &$attachments) {
+  $config = \Drupal::config('quantsearch_ai.settings');
+  $site_id = $config->get('site_id');
+
+  if (!$site_id) {
+    return;
+  }
+
+  // Attach chat widget settings if enabled globally (script added in hook_page_bottom)
+  if ($config->get('widgets.chat.enabled')) {
+    $attachments['#attached']['drupalSettings']['quantsearch_ai']['chat_enabled'] = TRUE;
+  }
+}
+
+/**
+ * Implements hook_page_bottom().
+ *
+ * Add chat widget script to the bottom of the page where document.body exists.
+ */
+function quantsearch_ai_page_bottom(array &$page_bottom) {
+  $config = \Drupal::config('quantsearch_ai.settings');
+  $site_id = $config->get('site_id');
+  $cdn_url = $config->get('cdn_url') ?: 'https://cdn.quantsearch.ai/v1';
+
+  if (!$site_id) {
+    return;
+  }
+
+  // Attach chat widget if enabled globally
+  if ($config->get('widgets.chat.enabled')) {
+    $chat_settings = $config->get('widgets.chat');
+    $attributes = [
+      'src' => $cdn_url . '/widget.js',
+      'data-site-id' => $site_id,
+      'data-theme' => $chat_settings['theme'] ?? 'auto',
+      'data-position' => $chat_settings['position'] ?? 'bottom-right',
+      'data-color' => $chat_settings['color'] ?? '#00d4aa',
+      'data-placeholder' => $chat_settings['placeholder'] ?? 'Ask a question...',
+      'async' => 'async',
+    ];
+
+    if (!empty($chat_settings['greeting'])) {
+      $attributes['data-greeting'] = $chat_settings['greeting'];
+    }
+
+    $page_bottom['quantsearch_chat_widget'] = [
+      '#type' => 'html_tag',
+      '#tag' => 'script',
+      '#attributes' => $attributes,
+      '#cache' => [
+        'tags' => ['config:quantsearch_ai.settings'],
+      ],
+    ];
+  }
+}
+
+/**
+ * Implements hook_theme().
+ */
+function quantsearch_ai_theme() {
+  return [
+    'quantsearch_modal_widget' => [
+      'variables' => [
+        'site_id' => NULL,
+        'cdn_url' => NULL,
+        'theme_setting' => 'auto',
+        'color' => '#10b981',
+        'placeholder' => 'Search...',
+        'show_ai_answer' => TRUE,
+      ],
+      'template' => 'quantsearch-modal-widget',
+    ],
+    'quantsearch_search_page' => [
+      'variables' => [
+        'site_id' => NULL,
+        'cdn_url' => NULL,
+        'theme_setting' => 'auto',
+        'color' => '#10b981',
+        'show_ai_answer' => TRUE,
+      ],
+      'template' => 'quantsearch-search-page',
+    ],
+  ];
+}

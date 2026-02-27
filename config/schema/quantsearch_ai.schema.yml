@@ -1,0 +1,141 @@
+quantsearch_ai.settings:
+  type: config_object
+  label: 'QuantSearch AI settings'
+  mapping:
+    api_key_id:
+      type: string
+      label: 'API Key ID (Key module reference)'
+    org_id:
+      type: string
+      label: 'Organization ID'
+    org_name:
+      type: string
+      label: 'Organization Name'
+    site_id:
+      type: string
+      label: 'Site ID'
+    site_name:
+      type: string
+      label: 'Site Name'
+    base_url:
+      type: string
+      label: 'Site Base URL'
+    available_sites:
+      type: sequence
+      label: 'Available sites from organization'
+      sequence:
+        type: mapping
+        mapping:
+          id:
+            type: string
+            label: 'Site ID'
+          name:
+            type: string
+            label: 'Site Name'
+          baseUrl:
+            type: string
+            label: 'Base URL'
+    api_endpoint:
+      type: string
+      label: 'QuantSearch API Endpoint'
+    cdn_url:
+      type: string
+      label: 'Widget CDN URL'
+    indexing:
+      type: mapping
+      label: 'Indexing settings'
+      mapping:
+        enabled:
+          type: boolean
+          label: 'Enable indexing'
+        realtime:
+          type: boolean
+          label: 'Real-time indexing on node save'
+        content_types:
+          type: sequence
+          label: 'Content types to index'
+          sequence:
+            type: string
+        exclude_unpublished:
+          type: boolean
+          label: 'Exclude unpublished content'
+        batch_size:
+          type: integer
+          label: 'Batch size for queue processing'
+        view_mode:
+          type: string
+          label: 'View mode to render for indexing'
+        field_mapping:
+          type: mapping
+          label: 'Field mapping'
+          mapping:
+            title_field:
+              type: string
+              label: 'Title field'
+            body_field:
+              type: string
+              label: 'Body field'
+            summary_field:
+              type: string
+              label: 'Summary field'
+            tags_field:
+              type: string
+              label: 'Tags field'
+    widgets:
+      type: mapping
+      label: 'Widget settings'
+      mapping:
+        chat:
+          type: mapping
+          label: 'Chat widget'
+          mapping:
+            enabled:
+              type: boolean
+              label: 'Enabled'
+            theme:
+              type: string
+              label: 'Theme'
+            position:
+              type: string
+              label: 'Position'
+            color:
+              type: string
+              label: 'Accent color'
+            placeholder:
+              type: string
+              label: 'Placeholder text'
+            greeting:
+              type: string
+              label: 'Greeting message'
+        modal:
+          type: mapping
+          label: 'Modal widget'
+          mapping:
+            enabled:
+              type: boolean
+              label: 'Enabled'
+            theme:
+              type: string
+              label: 'Theme'
+            color:
+              type: string
+              label: 'Accent color'
+            placeholder:
+              type: string
+              label: 'Placeholder text'
+        search_page:
+          type: mapping
+          label: 'Search page widget'
+          mapping:
+            enabled:
+              type: boolean
+              label: 'Enabled'
+            theme:
+              type: string
+              label: 'Theme'
+            color:
+              type: string
+              label: 'Accent color'
+            show_ai_answer:
+              type: boolean
+              label: 'Show AI answer'

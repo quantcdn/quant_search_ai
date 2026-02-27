@@ -1,0 +1,37 @@
+api_key_id: ''
+org_id: ''
+org_name: ''
+site_id: ''
+site_name: ''
+base_url: ''
+api_endpoint: 'https://quantsearch.ai/api'
+cdn_url: 'https://cdn.quantsearch.ai/v1'
+indexing:
+  enabled: true
+  realtime: true
+  content_types: []
+  exclude_unpublished: true
+  batch_size: 50
+  field_mapping:
+    title_field: 'title'
+    body_field: 'body'
+    summary_field: ''
+    tags_field: ''
+widgets:
+  chat:
+    enabled: false
+    theme: 'auto'
+    position: 'bottom-right'
+    color: '#00d4aa'
+    placeholder: 'Ask a question...'
+    greeting: ''
+  modal:
+    enabled: false
+    theme: 'auto'
+    color: '#10b981'
+    placeholder: 'Search...'
+  search_page:
+    enabled: false
+    theme: 'auto'
+    color: '#10b981'
+    show_ai_answer: true

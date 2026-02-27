@@ -1,0 +1,49 @@
+quantsearch_ai.settings_form:
+  path: '/admin/config/search/quantsearch'
+  defaults:
+    _form: '\Drupal\quantsearch_ai\Form\SettingsForm'
+    _title: 'QuantSearch AI Settings'
+  requirements:
+    _permission: 'administer quantsearch'
+  options:
+    _admin_route: TRUE
+
+quantsearch_ai.indexing_form:
+  path: '/admin/config/search/quantsearch/indexing'
+  defaults:
+    _form: '\Drupal\quantsearch_ai\Form\IndexingForm'
+    _title: 'QuantSearch Indexing'
+  requirements:
+    _permission: 'administer quantsearch'
+  options:
+    _admin_route: TRUE
+
+quantsearch_ai.oauth_connect:
+  path: '/admin/config/search/quantsearch/oauth/connect'
+  defaults:
+    _controller: '\Drupal\quantsearch_ai\Controller\OAuthController::connect'
+    _title: 'Connect to QuantSearch'
+  requirements:
+    _permission: 'administer quantsearch'
+  options:
+    _admin_route: TRUE
+
+quantsearch_ai.oauth_callback:
+  path: '/admin/config/search/quantsearch/oauth/callback'
+  defaults:
+    _controller: '\Drupal\quantsearch_ai\Controller\OAuthController::callback'
+    _title: 'OAuth Callback'
+  requirements:
+    _permission: 'administer quantsearch'
+  options:
+    _admin_route: TRUE
+
+quantsearch_ai.oauth_disconnect:
+  path: '/admin/config/search/quantsearch/oauth/disconnect'
+  defaults:
+    _controller: '\Drupal\quantsearch_ai\Controller\OAuthController::disconnect'
+    _title: 'Disconnect from QuantSearch'
+  requirements:
+    _permission: 'administer quantsearch'
+  options:
+    _admin_route: TRUE

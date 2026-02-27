@@ -1,0 +1,26 @@
+{
+  "name": "drupal/quant_search_ai",
+  "description": "Drupal integration with QuantSearch.ai for AI-powered semantic search and chat widgets",
+  "type": "drupal-module",
+  "license": "GPL-2.0-or-later",
+  "homepage": "https://www.drupal.org/project/quant_search_ai",
+  "support": {
+    "docs": "https://quantsearch.ai/docs",
+    "issues": "https://www.drupal.org/project/issues/quant_search_ai",
+    "source": "https://git.drupalcode.org/project/quant_search_ai"
+  },
+  "authors": [
+    {
+      "name": "Quant Cloud",
+      "homepage": "https://www.quantcdn.io",
+      "role": "Maintainer"
+    }
+  ],
+  "require": {
+    "php": ">=8.1",
+    "drupal/core": "^10.3 || ^11 || ^12",
+    "drupal/key": "^1.17"
+  },
+  "minimum-stability": "dev",
+  "prefer-stable": true
+}

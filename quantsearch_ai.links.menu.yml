@@ -1,0 +1,13 @@
+quantsearch_ai.settings:
+  title: 'QuantSearch AI'
+  description: 'Configure QuantSearch AI integration for semantic search and chat widgets.'
+  route_name: quantsearch_ai.settings_form
+  parent: system.admin_config_search
+  weight: 10
+
+quantsearch_ai.indexing:
+  title: 'QuantSearch Indexing'
+  description: 'Manage content indexing to QuantSearch.'
+  route_name: quantsearch_ai.indexing_form
+  parent: quantsearch_ai.settings
+  weight: 10

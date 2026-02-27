@@ -1,0 +1,24 @@
+{#
+/**
+ * @file
+ * QuantSearch Modal Widget template (Cmd+K search).
+ *
+ * Available variables:
+ * - site_id: The QuantSearch site identifier.
+ * - cdn_url: The CDN URL for widget scripts.
+ * - theme_setting: Theme mode (auto, light, dark).
+ * - color: Accent color hex code.
+ * - placeholder: Input placeholder text.
+ * - show_ai_answer: Whether to show AI answers.
+ */
+#}
+<div id="quant-search"></div>
+<script
+  src="{{ cdn_url }}/modal-widget.js"
+  data-site-id="{{ site_id }}"
+  data-theme="{{ theme_setting }}"
+  data-color="{{ color }}"
+  data-placeholder="{{ placeholder }}"
+  {% if show_ai_answer %}data-show-ai-answer="true"{% endif %}
+  async
+></script>

@@ -1,0 +1,8 @@
+administer quantsearch:
+  title: 'Administer QuantSearch AI'
+  description: 'Configure QuantSearch AI settings, manage indexing, and connect to QuantSearch.ai.'
+  restrict access: true
+
+trigger quantsearch index:
+  title: 'Trigger QuantSearch indexing'
+  description: 'Manually trigger content indexing to QuantSearch.'

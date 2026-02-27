@@ -1,0 +1,27 @@
+services:
+  quantsearch_ai.client:
+    class: Drupal\quantsearch_ai\Client\QuantSearchClient
+    arguments:
+      - '@http_client'
+      - '@config.factory'
+      - '@logger.factory'
+      - '@key.repository'
+
+  quantsearch_ai.auth:
+    class: Drupal\quantsearch_ai\Service\AuthService
+    arguments:
+      - '@http_client'
+      - '@config.factory'
+      - '@state'
+      - '@key.repository'
+
+  quantsearch_ai.indexing:
+    class: Drupal\quantsearch_ai\Service\IndexingService
+    arguments:
+      - '@quantsearch_ai.client'
+      - '@entity_type.manager'
+      - '@config.factory'
+      - '@logger.factory'
+      - '@queue'
+      - '@module_handler'
+      - '@renderer'

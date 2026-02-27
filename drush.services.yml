@@ -1,0 +1,8 @@
+services:
+  quantsearch_ai.commands:
+    class: Drupal\quantsearch_ai\Commands\QuantSearchCommands
+    arguments:
+      - '@quantsearch_ai.indexing'
+      - '@quantsearch_ai.client'
+    tags:
+      - { name: drush.command }

@@ -1,0 +1,11 @@
+quantsearch_ai.settings_tab:
+  title: 'Settings'
+  route_name: quantsearch_ai.settings_form
+  base_route: quantsearch_ai.settings_form
+  weight: 0
+
+quantsearch_ai.indexing_tab:
+  title: 'Indexing'
+  route_name: quantsearch_ai.indexing_form
+  base_route: quantsearch_ai.settings_form
+  weight: 10

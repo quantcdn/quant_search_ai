@@ -1,0 +1,22 @@
+{#
+/**
+ * @file
+ * QuantSearch Search Page template.
+ *
+ * Available variables:
+ * - site_id: The QuantSearch site identifier.
+ * - cdn_url: The CDN URL for widget scripts.
+ * - theme_setting: Theme mode (auto, light, dark).
+ * - color: Accent color hex code.
+ * - show_ai_answer: Whether to show AI answers above results.
+ */
+#}
+<div id="quant-search"></div>
+<script
+  src="{{ cdn_url }}/search-page.js"
+  data-site-id="{{ site_id }}"
+  data-theme="{{ theme_setting }}"
+  data-color="{{ color }}"
+  {% if show_ai_answer %}data-show-ai-answer="true"{% endif %}
+  async
+></script>
