@@ -66,21 +66,20 @@ quantsearch_ai.settings:
           type: string
           label: 'View mode to render for indexing'
         field_mapping:
-          type: mapping
-          label: 'Field mapping'
-          mapping:
-            title_field:
-              type: string
-              label: 'Title field'
-            body_field:
-              type: string
-              label: 'Body field'
-            summary_field:
-              type: string
-              label: 'Summary field'
-            tags_field:
-              type: string
-              label: 'Tags field'
+          type: sequence
+          label: 'Field mappings'
+          sequence:
+            type: mapping
+            mapping:
+              drupal_field:
+                type: string
+                label: 'Drupal field machine name'
+              metadata_key:
+                type: string
+                label: 'Metadata key name'
+              type:
+                type: string
+                label: 'Field type (string, number, date)'
     widgets:
       type: mapping
       label: 'Widget settings'

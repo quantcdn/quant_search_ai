@@ -219,6 +219,44 @@ class QuantSearchClient {
   }
 
   /**
+   * Deletes pages from the index by document key.
+   *
+   * Keys correspond to the 'key' field set during ingest (e.g. "node:123").
+   * Falls back gracefully if the backend does not yet support key-based
+   * deletion — the caller should also attempt URL-based deletion.
+   *
+   * @param array $keys
+   *   Array of document keys to delete.
+   *
+   * @return bool
+   *   TRUE on success, FALSE if the backend returned an error.
+   */
+  public function deletePagesByKey(array $keys): bool {
+    $site_id = $this->getSiteId();
+    if (!$site_id) {
+      throw new \Exception('Site ID not configured');
+    }
+
+    $url = $this->getBaseUrl() . '/sites/' . $site_id . '/pages';
+
+    try {
+      $response = $this->httpClient->delete($url, [
+        'headers' => $this->getHeaders(),
+        'json' => ['keys' => $keys],
+        'timeout' => 30,
+      ]);
+
+      return $response->getStatusCode() >= 200 && $response->getStatusCode() < 300;
+    }
+    catch (GuzzleException $e) {
+      $this->logger->warning('QuantSearch key-based delete failed (will fall back to URL delete): @message', [
+        '@message' => $e->getMessage(),
+      ]);
+      return FALSE;
+    }
+  }
+
+  /**
    * Triggers a full site crawl.
    *
    * @param array $options

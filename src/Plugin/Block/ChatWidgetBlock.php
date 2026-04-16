@@ -26,6 +26,7 @@ class ChatWidgetBlock extends BlockBase {
       'color' => '#00d4aa',
       'placeholder' => 'Ask a question...',
       'greeting' => '',
+      'preset_filters' => '',
     ];
   }
 
@@ -74,7 +75,30 @@ class ChatWidgetBlock extends BlockBase {
       '#description' => $this->t('Optional greeting shown when chat opens.'),
     ];
 
+    $form['preset_filters'] = [
+      '#type' => 'textarea',
+      '#title' => $this->t('Pre-set filters (JSON)'),
+      '#description' => $this->t('Optional JSON filters applied to all searches. Example: {"content_type":"policy"}'),
+      '#default_value' => $this->configuration['preset_filters'],
+      '#rows' => 3,
+    ];
+
     return $form;
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function blockValidate($form, FormStateInterface $form_state) {
+    $filters = $form_state->getValue('preset_filters');
+    if (!empty($filters)) {
+      json_decode($filters);
+      if (json_last_error() !== JSON_ERROR_NONE) {
+        $form_state->setErrorByName('preset_filters', $this->t('Pre-set filters must be valid JSON. Error: @error', [
+          '@error' => json_last_error_msg(),
+        ]));
+      }
+    }
   }
 
   /**
@@ -86,6 +110,7 @@ class ChatWidgetBlock extends BlockBase {
     $this->configuration['color'] = $form_state->getValue('color');
     $this->configuration['placeholder'] = $form_state->getValue('placeholder');
     $this->configuration['greeting'] = $form_state->getValue('greeting');
+    $this->configuration['preset_filters'] = $form_state->getValue('preset_filters');
   }
 
   /**
@@ -115,6 +140,10 @@ class ChatWidgetBlock extends BlockBase {
 
     if (!empty($this->configuration['greeting'])) {
       $attributes['data-greeting'] = $this->configuration['greeting'];
+    }
+
+    if (!empty($this->configuration['preset_filters'])) {
+      $attributes['data-filters'] = $this->configuration['preset_filters'];
     }
 
     return [

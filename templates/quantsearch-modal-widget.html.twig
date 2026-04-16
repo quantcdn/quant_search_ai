@@ -10,6 +10,7 @@
  * - color: Accent color hex code.
  * - placeholder: Input placeholder text.
  * - show_ai_answer: Whether to show AI answers.
+ * - preset_filters: JSON string of pre-set filters.
  */
 #}
 <div id="quant-search"></div>
@@ -20,5 +21,6 @@
   data-color="{{ color }}"
   data-placeholder="{{ placeholder }}"
   {% if show_ai_answer %}data-show-ai-answer="true"{% endif %}
+  {% if preset_filters %}data-filters="{{ preset_filters|e('html_attr') }}"{% endif %}
   async
 ></script>

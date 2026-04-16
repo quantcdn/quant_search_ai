@@ -171,11 +171,18 @@ class IndexingService {
    *   TRUE on success.
    */
   public function deleteNode(NodeInterface $node): bool {
-    // Use relative URL to match what we stored during indexing
-    $url = $node->toUrl('canonical')->toString();
+    $key = 'node:' . $node->id();
 
     try {
-      $result = $this->client->deletePages([$url]);
+      // Try key-based delete first — matches the 'key' field set during ingest.
+      $result = $this->client->deletePagesByKey([$key]);
+
+      if (!$result) {
+        // Fall back to URL-based delete for backward compatibility (older
+        // documents may not have been indexed with a key).
+        $url = $node->toUrl('canonical')->toString();
+        $result = $this->client->deletePages([$url]);
+      }
 
       if ($result) {
         $this->logger->info('Deleted node @nid from QuantSearch index.', [
@@ -408,17 +415,85 @@ class IndexingService {
     // Also add content type as a tag for filtering
     $tags[] = 'type:' . $node->bundle();
 
+    // Build custom metadata from field mappings.
+    $metadata = [];
+    $fieldMappings = $config->get('indexing.field_mapping') ?: [];
+
+    // Reserved keys that the backend manages — custom metadata using these names
+    // will be silently dropped by the ingest API.
+    $reservedKeys = [
+      'url', 'originalUrl', 'title', 'summary', 'tags',
+      'topics', 'fetchedAt', 'crawledAt', 'jobId',
+      'publishedAt', 'dateSource',
+    ];
+
+    foreach ($fieldMappings as $mapping) {
+      $drupalField = $mapping['drupal_field'] ?? '';
+      $metadataKey = $mapping['metadata_key'] ?? '';
+      $fieldType = $mapping['type'] ?? 'string';
+
+      if (empty($drupalField) || empty($metadataKey) || !$node->hasField($drupalField)) {
+        continue;
+      }
+
+      if (in_array($metadataKey, $reservedKeys, TRUE)) {
+        $this->logger->warning(
+          'Field mapping "@field" uses reserved metadata key "@key" — this value will be ignored by the search API. Use a different metadata key name.',
+          ['@field' => $drupalField, '@key' => $metadataKey]
+        );
+        continue;
+      }
+
+      $field = $node->get($drupalField);
+      if ($field->isEmpty()) {
+        continue;
+      }
+
+      // Handle entity reference fields (taxonomy terms, etc.).
+      if ($field->getFieldDefinition()->getType() === 'entity_reference') {
+        $entities = $field->referencedEntities();
+        if (count($entities) > 1) {
+          $metadata[$metadataKey] = array_map(fn($e) => $e->label(), $entities);
+        }
+        elseif (count($entities) === 1) {
+          $metadata[$metadataKey] = $entities[0]->label();
+        }
+        continue;
+      }
+
+      $value = $field->value;
+      switch ($fieldType) {
+        case 'number':
+          $metadata[$metadataKey] = is_numeric($value) ? (float) $value : $value;
+          break;
+
+        case 'date':
+          if (is_numeric($value)) {
+            $metadata[$metadataKey] = (int) $value;
+          }
+          else {
+            $metadata[$metadataKey] = strtotime($value) ?: $value;
+          }
+          break;
+
+        default:
+          $metadata[$metadataKey] = (string) $value;
+      }
+    }
+
+    // Always include content_type.
+    $metadata['content_type'] = $node->bundle();
+
     $page = [
       'url' => $url,
       'title' => $title,
       'content' => $content,
       'contentType' => 'html',
+      'tags' => array_values(array_unique($tags)),
       'fetchedAt' => date('c'),
+      'key' => 'node:' . $node->id(),
+      'metadata' => !empty($metadata) ? $metadata : NULL,
     ];
-
-    if (!empty($tags)) {
-      $page['tags'] = array_unique($tags);
-    }
 
     // Allow other modules to alter the page data.
     $this->moduleHandler->alter('quantsearch_ai_page', $page, $node);

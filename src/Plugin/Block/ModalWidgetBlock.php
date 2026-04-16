@@ -25,6 +25,7 @@ class ModalWidgetBlock extends BlockBase {
       'color' => '#10b981',
       'placeholder' => 'Search...',
       'show_ai_answer' => TRUE,
+      'preset_filters' => '',
     ];
   }
 
@@ -63,7 +64,30 @@ class ModalWidgetBlock extends BlockBase {
       '#description' => $this->t('Display an AI-generated answer above search results.'),
     ];
 
+    $form['preset_filters'] = [
+      '#type' => 'textarea',
+      '#title' => $this->t('Pre-set filters (JSON)'),
+      '#description' => $this->t('Optional JSON filters applied to all searches. Example: {"content_type":"policy"}'),
+      '#default_value' => $this->configuration['preset_filters'],
+      '#rows' => 3,
+    ];
+
     return $form;
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function blockValidate($form, FormStateInterface $form_state) {
+    $filters = $form_state->getValue('preset_filters');
+    if (!empty($filters)) {
+      json_decode($filters);
+      if (json_last_error() !== JSON_ERROR_NONE) {
+        $form_state->setErrorByName('preset_filters', $this->t('Pre-set filters must be valid JSON. Error: @error', [
+          '@error' => json_last_error_msg(),
+        ]));
+      }
+    }
   }
 
   /**
@@ -74,6 +98,7 @@ class ModalWidgetBlock extends BlockBase {
     $this->configuration['color'] = $form_state->getValue('color');
     $this->configuration['placeholder'] = $form_state->getValue('placeholder');
     $this->configuration['show_ai_answer'] = $form_state->getValue('show_ai_answer');
+    $this->configuration['preset_filters'] = $form_state->getValue('preset_filters');
   }
 
   /**
@@ -99,6 +124,7 @@ class ModalWidgetBlock extends BlockBase {
       '#color' => $this->configuration['color'],
       '#placeholder' => $this->configuration['placeholder'],
       '#show_ai_answer' => $this->configuration['show_ai_answer'],
+      '#preset_filters' => $this->configuration['preset_filters'],
       '#cache' => [
         'tags' => ['config:quantsearch_ai.settings'],
       ],

@@ -9,6 +9,9 @@
  * - theme_setting: Theme mode (auto, light, dark).
  * - color: Accent color hex code.
  * - show_ai_answer: Whether to show AI answers above results.
+ * - enable_facets: Whether to show faceted search controls.
+ * - facet_position: Facet position (left, top).
+ * - preset_filters: JSON string of pre-set filters.
  */
 #}
 <div id="quant-search"></div>
@@ -18,5 +21,7 @@
   data-theme="{{ theme_setting }}"
   data-color="{{ color }}"
   {% if show_ai_answer %}data-show-ai-answer="true"{% endif %}
+  {% if enable_facets %}data-facets="true" data-facet-position="{{ facet_position }}"{% endif %}
+  {% if preset_filters %}data-filters="{{ preset_filters|e('html_attr') }}"{% endif %}
   async
 ></script>

@@ -24,6 +24,9 @@ class SearchPageBlock extends BlockBase {
       'theme' => 'auto',
       'color' => '#10b981',
       'show_ai_answer' => TRUE,
+      'enable_facets' => FALSE,
+      'facet_position' => 'left',
+      'preset_filters' => '',
     ];
   }
 
@@ -56,7 +59,52 @@ class SearchPageBlock extends BlockBase {
       '#description' => $this->t('Display an AI-generated answer above search results.'),
     ];
 
+    $form['enable_facets'] = [
+      '#type' => 'checkbox',
+      '#title' => $this->t('Enable faceted search'),
+      '#description' => $this->t('Show filter controls based on the site metadata schema.'),
+      '#default_value' => $this->configuration['enable_facets'],
+    ];
+
+    $form['facet_position'] = [
+      '#type' => 'select',
+      '#title' => $this->t('Facet position'),
+      '#options' => [
+        'left' => $this->t('Left sidebar'),
+        'top' => $this->t('Above results'),
+      ],
+      '#default_value' => $this->configuration['facet_position'],
+      '#states' => [
+        'visible' => [
+          ':input[name="settings[enable_facets]"]' => ['checked' => TRUE],
+        ],
+      ],
+    ];
+
+    $form['preset_filters'] = [
+      '#type' => 'textarea',
+      '#title' => $this->t('Pre-set filters (JSON)'),
+      '#description' => $this->t('Optional JSON filters applied to all searches. Example: {"content_type":"policy"}'),
+      '#default_value' => $this->configuration['preset_filters'],
+      '#rows' => 3,
+    ];
+
     return $form;
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function blockValidate($form, FormStateInterface $form_state) {
+    $filters = $form_state->getValue('preset_filters');
+    if (!empty($filters)) {
+      json_decode($filters);
+      if (json_last_error() !== JSON_ERROR_NONE) {
+        $form_state->setErrorByName('preset_filters', $this->t('Pre-set filters must be valid JSON. Error: @error', [
+          '@error' => json_last_error_msg(),
+        ]));
+      }
+    }
   }
 
   /**
@@ -66,6 +114,9 @@ class SearchPageBlock extends BlockBase {
     $this->configuration['theme'] = $form_state->getValue('theme');
     $this->configuration['color'] = $form_state->getValue('color');
     $this->configuration['show_ai_answer'] = $form_state->getValue('show_ai_answer');
+    $this->configuration['enable_facets'] = $form_state->getValue('enable_facets');
+    $this->configuration['facet_position'] = $form_state->getValue('facet_position');
+    $this->configuration['preset_filters'] = $form_state->getValue('preset_filters');
   }
 
   /**
@@ -90,6 +141,9 @@ class SearchPageBlock extends BlockBase {
       '#theme_setting' => $this->configuration['theme'],
       '#color' => $this->configuration['color'],
       '#show_ai_answer' => $this->configuration['show_ai_answer'],
+      '#enable_facets' => $this->configuration['enable_facets'],
+      '#facet_position' => $this->configuration['facet_position'],
+      '#preset_filters' => $this->configuration['preset_filters'],
       '#cache' => [
         'tags' => ['config:quantsearch_ai.settings'],
       ],
