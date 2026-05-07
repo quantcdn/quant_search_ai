@@ -35,6 +35,22 @@ quantsearch_ai.settings:
           baseUrl:
             type: string
             label: 'Base URL'
+    language_sites:
+      type: sequence
+      label: 'Per-language site mappings (optional, multi-lingual sites only)'
+      sequence:
+        type: mapping
+        label: 'Language site mapping'
+        mapping:
+          site_id:
+            type: string
+            label: 'QuantSearch Site ID for this language'
+          site_name:
+            type: string
+            label: 'Site name (display only)'
+          base_url:
+            type: string
+            label: 'Drupal site base URL prefix for this language'
     api_endpoint:
       type: string
       label: 'QuantSearch API Endpoint'
