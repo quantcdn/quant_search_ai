@@ -78,6 +78,7 @@ class ContentIndexQueueWorker extends QueueWorkerBase implements ContainerFactor
   public function processItem($data) {
     $nid = $data['nid'] ?? NULL;
     $operation = $data['operation'] ?? 'index';
+    $langcode = $data['langcode'] ?? NULL;
 
     if (!$nid) {
       return;
@@ -91,10 +92,20 @@ class ContentIndexQueueWorker extends QueueWorkerBase implements ContainerFactor
     }
 
     if ($operation === 'delete') {
-      $this->indexingService->deleteNode($node);
+      if ($langcode) {
+        $this->indexingService->deleteNodeLanguage($node, $langcode);
+      }
+      else {
+        $this->indexingService->deleteNode($node);
+      }
     }
     else {
-      $this->indexingService->indexNode($node);
+      if ($langcode) {
+        $this->indexingService->indexNodeLanguage($node, $langcode);
+      }
+      else {
+        $this->indexingService->indexNode($node);
+      }
     }
   }
 

@@ -108,4 +108,100 @@ class IndexingServiceTest extends KernelTestBase {
     $this->assertTrue($service->indexNode($node));
   }
 
+  public function testIndexNodeLanguageDispatchesOnlyTheSelectedLanguage(): void {
+    $node = $this->createNode(['type' => 'page', 'title' => 'Hello', 'langcode' => 'en']);
+    $node->addTranslation('fr', ['title' => 'Bonjour'])->save();
+
+    $client = $this->createMock(\Drupal\quantsearch_ai\Client\QuantSearchClient::class);
+    $client->expects($this->once())
+      ->method('ingestPages')
+      ->willReturnCallback(function (array $pages, ?bool $wait, ?string $langcode) {
+        $this->assertSame('fr', $langcode);
+        $this->assertSame('Bonjour', $pages[0]['title']);
+        return ['queued' => TRUE];
+      });
+
+    $this->container->set('quantsearch_ai.client', $client);
+    $service = \Drupal::service('quantsearch_ai.indexing');
+    $this->assertTrue($service->indexNodeLanguage($node, 'fr'));
+  }
+
+  public function testIndexNodeLanguageReturnsFalseForUnmappedLanguage(): void {
+    \Drupal::languageManager()->reset();
+    \Drupal::service('content_translation.manager')
+      ->setEnabled('node', 'page', TRUE);
+
+    $node = $this->createNode(['type' => 'page', 'title' => 'Hello', 'langcode' => 'en']);
+    $node->addTranslation('fr', ['title' => 'Bonjour'])->save();
+
+    // Limit mapped languages to en only — fr is now unmapped.
+    \Drupal::configFactory()->getEditable('quantsearch_ai.settings')
+      ->set('language_sites', [
+        'en' => ['site_id' => 'en-site', 'base_url' => '/en'],
+      ])
+      ->save();
+
+    $client = $this->createMock(\Drupal\quantsearch_ai\Client\QuantSearchClient::class);
+    $client->expects($this->never())->method('ingestPages');
+
+    $this->container->set('quantsearch_ai.client', $client);
+    $service = \Drupal::service('quantsearch_ai.indexing');
+    $this->assertFalse($service->indexNodeLanguage($node, 'fr'));
+  }
+
+  public function testDeleteNodeLanguageDeletesSelectedLanguageOnly(): void {
+    $node = $this->createNode(['type' => 'page', 'title' => 'Hello', 'langcode' => 'en']);
+    $node->addTranslation('fr', ['title' => 'Bonjour'])->save();
+
+    $client = $this->createMock(\Drupal\quantsearch_ai\Client\QuantSearchClient::class);
+    $client->expects($this->once())
+      ->method('deletePagesByKey')
+      ->willReturnCallback(function (array $keys, ?string $langcode) use ($node) {
+        $this->assertSame('fr', $langcode);
+        $this->assertSame(['node:' . $node->id() . ':fr'], $keys);
+        return TRUE;
+      });
+    $client->expects($this->never())->method('deletePages');
+
+    $this->container->set('quantsearch_ai.client', $client);
+    $service = \Drupal::service('quantsearch_ai.indexing');
+    $this->assertTrue($service->deleteNodeLanguage($node, 'fr'));
+  }
+
+  public function testQueueNodeEnqueuesOnePerMappedLanguage(): void {
+    $node = $this->createNode(['type' => 'page', 'title' => 'Hello', 'langcode' => 'en']);
+    $node->addTranslation('fr', ['title' => 'Bonjour'])->save();
+
+    \Drupal::service('quantsearch_ai.indexing')->queueNode($node);
+    $queue = \Drupal::service('queue')->get('quantsearch_content_index');
+    $this->assertSame(2, $queue->numberOfItems());
+
+    // Drain and assert each carries a langcode.
+    $seenLangs = [];
+    while ($item = $queue->claimItem()) {
+      $this->assertSame((string) $node->id(), (string) $item->data['nid']);
+      $this->assertSame('index', $item->data['operation']);
+      $this->assertArrayHasKey('langcode', $item->data);
+      $seenLangs[] = $item->data['langcode'];
+      $queue->deleteItem($item);
+    }
+    sort($seenLangs);
+    $this->assertSame(['en', 'fr'], $seenLangs);
+  }
+
+  public function testQueueNodeOmitsLangcodeWhenNotMultilingual(): void {
+    \Drupal::configFactory()->getEditable('quantsearch_ai.settings')
+      ->clear('language_sites')
+      ->save();
+
+    $node = $this->createNode(['type' => 'page', 'title' => 'Hello']);
+    \Drupal::service('quantsearch_ai.indexing')->queueNode($node);
+
+    $queue = \Drupal::service('queue')->get('quantsearch_content_index');
+    $this->assertSame(1, $queue->numberOfItems());
+    $item = $queue->claimItem();
+    $this->assertArrayNotHasKey('langcode', $item->data);
+    $queue->deleteItem($item);
+  }
+
 }

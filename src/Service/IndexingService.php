@@ -163,7 +163,99 @@ class IndexingService {
   }
 
   /**
+   * Indexes just one translation of a node.
+   *
+   * Single-translation counterpart to {@see indexNode()}. Used by the queue
+   * worker when a queue item carries a langcode (per-translation processing).
+   *
+   * @param \Drupal\node\NodeInterface $node
+   *   The node whose translation to index.
+   * @param string $langcode
+   *   The langcode of the translation to index.
+   *
+   * @return bool
+   *   TRUE on success, FALSE if the translation is not indexable or the
+   *   ingest call failed.
+   */
+  public function indexNodeLanguage(NodeInterface $node, string $langcode): bool {
+    if (!$this->shouldIndex($node)) {
+      return FALSE;
+    }
+    if (!$node->hasTranslation($langcode)) {
+      return FALSE;
+    }
+    if ($this->siteResolver->isMultilingual()
+        && !in_array($langcode, $this->siteResolver->getMappedLanguages(), TRUE)) {
+      return FALSE;
+    }
+    $passLang = $this->siteResolver->isMultilingual() ? $langcode : NULL;
+    $page = $this->nodeToPage($node, $passLang);
+    try {
+      $this->client->ingestPages([$page], FALSE, $passLang);
+      $this->logger->info('Indexed node @nid lang=@lang.', [
+        '@nid' => $node->id(),
+        '@lang' => $langcode,
+      ]);
+      return TRUE;
+    }
+    catch (\Exception $e) {
+      $this->logger->error('Failed to index node @nid lang=@lang: @msg', [
+        '@nid' => $node->id(),
+        '@lang' => $langcode,
+        '@msg' => $e->getMessage(),
+      ]);
+      return FALSE;
+    }
+  }
+
+  /**
+   * Deletes just one translation of a node from its language's site.
+   *
+   * Single-translation counterpart to {@see deleteNode()}. Used by the queue
+   * worker when a queue item carries a langcode.
+   *
+   * @param \Drupal\node\NodeInterface $node
+   *   The node whose translation to delete.
+   * @param string $langcode
+   *   The langcode of the translation to delete.
+   *
+   * @return bool
+   *   TRUE on success, FALSE on failure.
+   */
+  public function deleteNodeLanguage(NodeInterface $node, string $langcode): bool {
+    $multilingual = $this->siteResolver->isMultilingual();
+    $key = $multilingual ? 'node:' . $node->id() . ':' . $langcode : 'node:' . $node->id();
+    try {
+      $passLang = $multilingual ? $langcode : NULL;
+      if (!$this->client->deletePagesByKey([$key], $passLang)) {
+        if ($node->hasTranslation($langcode)) {
+          $translation = $node->getTranslation($langcode);
+          $url = $translation->toUrl('canonical', ['language' => $translation->language()])->toString();
+          $this->client->deletePages([$url], $passLang);
+        }
+      }
+      $this->logger->info('Deleted node @nid lang=@lang from QuantSearch index.', [
+        '@nid' => $node->id(),
+        '@lang' => $langcode,
+      ]);
+      return TRUE;
+    }
+    catch (\Exception $e) {
+      $this->logger->error('Failed to delete node @nid lang=@lang: @msg', [
+        '@nid' => $node->id(),
+        '@lang' => $langcode,
+        '@msg' => $e->getMessage(),
+      ]);
+      return FALSE;
+    }
+  }
+
+  /**
    * Queues a node for batch indexing.
+   *
+   * On multilingual sites, enqueues one item per mapped translation so the
+   * queue worker can process each translation independently. Single-language
+   * sites enqueue a single item without a langcode (legacy payload).
    *
    * @param \Drupal\node\NodeInterface $node
    *   The node to queue.
@@ -174,10 +266,27 @@ class IndexingService {
     }
 
     $queue = $this->queueFactory->get('quantsearch_content_index');
-    $queue->createItem([
-      'nid' => $node->id(),
-      'operation' => 'index',
-    ]);
+
+    if (!$this->siteResolver->isMultilingual()) {
+      $queue->createItem([
+        'nid' => $node->id(),
+        'operation' => 'index',
+      ]);
+      return;
+    }
+
+    $mapped = $this->siteResolver->getMappedLanguages();
+    foreach ($node->getTranslationLanguages() as $language) {
+      $langcode = $language->getId();
+      if (!in_array($langcode, $mapped, TRUE)) {
+        continue;
+      }
+      $queue->createItem([
+        'nid' => $node->id(),
+        'langcode' => $langcode,
+        'operation' => 'index',
+      ]);
+    }
   }
 
   /**
