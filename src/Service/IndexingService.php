@@ -10,6 +10,7 @@ use Drupal\Core\Queue\QueueFactory;
 use Drupal\Core\Render\RendererInterface;
 use Drupal\node\NodeInterface;
 use Drupal\quantsearch_ai\Client\QuantSearchClient;
+use Drupal\quantsearch_ai\Service\SiteResolver;
 
 /**
  * Service for indexing content to QuantSearch.
@@ -66,6 +67,13 @@ class IndexingService {
   protected $renderer;
 
   /**
+   * The site resolver.
+   *
+   * @var \Drupal\quantsearch_ai\Service\SiteResolver
+   */
+  protected SiteResolver $siteResolver;
+
+  /**
    * Constructs the IndexingService.
    *
    * @param \Drupal\quantsearch_ai\Client\QuantSearchClient $client
@@ -82,6 +90,8 @@ class IndexingService {
    *   The module handler.
    * @param \Drupal\Core\Render\RendererInterface $renderer
    *   The renderer.
+   * @param \Drupal\quantsearch_ai\Service\SiteResolver $site_resolver
+   *   The site resolver.
    */
   public function __construct(
     QuantSearchClient $client,
@@ -90,7 +100,8 @@ class IndexingService {
     LoggerChannelFactoryInterface $logger_factory,
     QueueFactory $queue_factory,
     ModuleHandlerInterface $module_handler,
-    RendererInterface $renderer
+    RendererInterface $renderer,
+    SiteResolver $site_resolver
   ) {
     $this->client = $client;
     $this->entityTypeManager = $entity_type_manager;
@@ -99,6 +110,7 @@ class IndexingService {
     $this->queueFactory = $queue_factory;
     $this->moduleHandler = $module_handler;
     $this->renderer = $renderer;
+    $this->siteResolver = $site_resolver;
   }
 
   /**
@@ -369,6 +381,49 @@ class IndexingService {
   }
 
   /**
+   * Converts a node to one page per indexable translation.
+   *
+   * When the site is multilingual (a `language_sites` map is configured), one
+   * page is produced for every translation whose langcode is mapped. Unmapped
+   * translations are skipped. When not multilingual, a single entry using the
+   * node's current language is returned with the legacy `node:{nid}` key.
+   *
+   * @param \Drupal\node\NodeInterface $node
+   *   The node to convert.
+   *
+   * @return array<int, array{langcode: string, page: array}>
+   *   Each entry has the langcode and the page payload.
+   */
+  public function nodeToPages(NodeInterface $node): array {
+    $multilingual = $this->siteResolver->isMultilingual();
+    $mapped = $this->siteResolver->getMappedLanguages();
+    $results = [];
+
+    if (!$multilingual) {
+      // Single-language site: keep legacy key format for backwards compat.
+      $page = $this->nodeToPage($node, NULL);
+      $results[] = ['langcode' => $node->language()->getId(), 'page' => $page];
+      return $results;
+    }
+
+    foreach ($node->getTranslationLanguages() as $language) {
+      $langcode = $language->getId();
+      if (!in_array($langcode, $mapped, TRUE)) {
+        // Skip languages with no mapped site.
+        continue;
+      }
+      $results[] = [
+        'langcode' => $langcode,
+        // Pass the original node + langcode; nodeToPage() resolves the
+        // translation itself.
+        'page' => $this->nodeToPage($node, $langcode),
+      ];
+    }
+
+    return $results;
+  }
+
+  /**
    * Converts a node to QuantSearch page format.
    *
    * Renders the node using its view mode to capture full content including
@@ -376,23 +431,35 @@ class IndexingService {
    *
    * @param \Drupal\node\NodeInterface $node
    *   The node to convert.
+   * @param string|null $langcode
+   *   Optional langcode. When provided, the page is built from the matching
+   *   translation and the key includes the langcode for collision-free
+   *   per-language indexing.
    *
    * @return array
    *   The page data.
    */
-  protected function nodeToPage(NodeInterface $node): array {
+  protected function nodeToPage(NodeInterface $node, ?string $langcode = NULL): array {
     $config = $this->configFactory->get('quantsearch_ai.settings');
     $view_mode = $config->get('indexing.view_mode') ?: 'full';
 
-    // Get relative URL path (QuantSearch stores relative URLs for consistency)
-    $url = $node->toUrl('canonical')->toString();
+    // URL + title: when multilingual, prefer the language-specific translation
+    // so URL aliases and titles come from the right language.
+    if ($langcode !== NULL) {
+      $translation = $node->getTranslation($langcode);
+      $url = $node->toUrl('canonical', ['language' => $translation->language()])->toString();
+      $title = $translation->getTitle();
+    }
+    else {
+      $url = $node->toUrl('canonical')->toString();
+      $title = $node->getTitle();
+    }
 
-    // Extract title
-    $title = $node->getTitle();
-
-    // Render the node using the configured view mode
+    // Render the node (translation when multilingual) using the configured
+    // view mode.
+    $render_target = $langcode !== NULL ? $node->getTranslation($langcode) : $node;
     $view_builder = $this->entityTypeManager->getViewBuilder('node');
-    $build = $view_builder->view($node, $view_mode);
+    $build = $view_builder->view($render_target, $view_mode);
     $content = (string) $this->renderer->renderPlain($build);
 
     // Clean up the HTML - remove scripts, styles, comments, nav elements
@@ -484,6 +551,11 @@ class IndexingService {
     // Always include content_type.
     $metadata['content_type'] = $node->bundle();
 
+    // Key: include langcode when multilingual so collisions cannot occur.
+    $key = $langcode !== NULL
+      ? 'node:' . $node->id() . ':' . $langcode
+      : 'node:' . $node->id();
+
     $page = [
       'url' => $url,
       'title' => $title,
@@ -491,9 +563,13 @@ class IndexingService {
       'contentType' => 'html',
       'tags' => array_values(array_unique($tags)),
       'fetchedAt' => date('c'),
-      'key' => 'node:' . $node->id(),
+      'key' => $key,
       'metadata' => !empty($metadata) ? $metadata : NULL,
     ];
+
+    if ($langcode !== NULL) {
+      $page['language'] = $langcode;
+    }
 
     // Allow other modules to alter the page data.
     $this->moduleHandler->alter('quantsearch_ai_page', $page, $node);

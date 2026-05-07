@@ -26,6 +26,7 @@ services:
       - '@queue'
       - '@module_handler'
       - '@renderer'
+      - '@quantsearch_ai.site_resolver'
 
   quantsearch_ai.site_resolver:
     class: Drupal\quantsearch_ai\Service\SiteResolver
