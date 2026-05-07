@@ -59,7 +59,7 @@ class SiteResolver {
 
   protected function lookup(?string $langcode, string $key): ?string {
     $config = $this->configFactory->get('quantsearch_ai.settings');
-    if ($langcode !== NULL) {
+    if ($langcode !== NULL && $langcode !== '') {
       $value = $config->get("language_sites.$langcode.$key");
       if (!empty($value)) {
         return $value;

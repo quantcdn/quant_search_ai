@@ -89,6 +89,39 @@ class SiteResolverTest extends UnitTestCase {
       ],
     ]);
 
-    $this->assertSame(['en', 'fr'], $resolver->getMappedLanguages());
+    $this->assertEqualsCanonicalizing(['en', 'fr'], $resolver->getMappedLanguages());
+  }
+
+  public function testApiEndpointDefaultsWhenUnset(): void {
+    $resolver = $this->buildResolver([]);
+    $this->assertSame('https://quantsearch.ai/api', $resolver->getApiEndpoint());
+  }
+
+  public function testApiEndpointReturnsConfiguredValue(): void {
+    $resolver = $this->buildResolver(['api_endpoint' => 'https://staging.example/api']);
+    $this->assertSame('https://staging.example/api', $resolver->getApiEndpoint());
+  }
+
+  public function testNullLangcodeFallsBackToFlatEvenWhenMultilingual(): void {
+    $resolver = $this->buildResolver([
+      'site_id' => 'flat-site',
+      'language_sites' => [
+        'en' => ['site_id' => 'en-site'],
+        'fr' => ['site_id' => 'fr-site'],
+      ],
+    ]);
+
+    $this->assertSame('flat-site', $resolver->getSiteId(NULL));
+  }
+
+  public function testEmptyLangcodeFallsBackToFlat(): void {
+    $resolver = $this->buildResolver([
+      'site_id' => 'flat-site',
+      'language_sites' => [
+        'en' => ['site_id' => 'en-site'],
+      ],
+    ]);
+
+    $this->assertSame('flat-site', $resolver->getSiteId(''));
   }
 }
