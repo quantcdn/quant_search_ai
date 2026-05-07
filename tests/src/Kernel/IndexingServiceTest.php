@@ -91,4 +91,21 @@ class IndexingServiceTest extends KernelTestBase {
     $this->assertSame('node:' . $node->id(), $pages[0]['page']['key']);
   }
 
+  public function testIndexNodeCallsClientOncePerTranslation(): void {
+    $node = $this->createNode(['type' => 'page', 'title' => 'Hello', 'langcode' => 'en']);
+    $node->addTranslation('fr', ['title' => 'Bonjour'])->save();
+
+    $client = $this->createMock(\Drupal\quantsearch_ai\Client\QuantSearchClient::class);
+    $client->expects($this->exactly(2))
+      ->method('ingestPages')
+      ->willReturnCallback(function (array $pages, ?bool $wait, ?string $langcode) {
+        $this->assertContains($langcode, ['en', 'fr']);
+        return ['queued' => TRUE];
+      });
+
+    $this->container->set('quantsearch_ai.client', $client);
+    $service = \Drupal::service('quantsearch_ai.indexing');
+    $this->assertTrue($service->indexNode($node));
+  }
+
 }

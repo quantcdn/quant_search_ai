@@ -127,32 +127,39 @@ class IndexingService {
       return FALSE;
     }
 
-    $start = microtime(TRUE);
-    $page = $this->nodeToPage($node);
-    $prepTime = round((microtime(TRUE) - $start) * 1000);
-
-    try {
-      $apiStart = microtime(TRUE);
-      // Single page = wait=false (fire-and-forget)
-      $result = $this->client->ingestPages([$page], FALSE);
-      $apiTime = round((microtime(TRUE) - $apiStart) * 1000);
-
-      $this->logger->info('Indexed node @nid (@title) to QuantSearch. Prep: @prep ms, API: @api ms, Queued: @queued', [
-        '@nid' => $node->id(),
-        '@title' => $node->getTitle(),
-        '@prep' => $prepTime,
-        '@api' => $apiTime,
-        '@queued' => $result['queued'] ?? FALSE ? 'yes' : 'no',
-      ]);
-      return TRUE;
-    }
-    catch (\Exception $e) {
-      $this->logger->error('Failed to index node @nid: @message', [
-        '@nid' => $node->id(),
-        '@message' => $e->getMessage(),
-      ]);
+    $entries = $this->nodeToPages($node);
+    if (empty($entries)) {
       return FALSE;
     }
+
+    $allOk = TRUE;
+    foreach ($entries as $entry) {
+      $langcode = $entry['langcode'];
+      $page = $entry['page'];
+      $apiStart = microtime(TRUE);
+      try {
+        // Single page per language = wait=false (fire-and-forget). Pass NULL
+        // langcode for non-multilingual sites to preserve legacy behaviour.
+        $result = $this->client->ingestPages([$page], FALSE, $this->siteResolver->isMultilingual() ? $langcode : NULL);
+        $apiTime = round((microtime(TRUE) - $apiStart) * 1000);
+        $this->logger->info('Indexed node @nid (@title) lang=@lang. API: @api ms, Queued: @queued', [
+          '@nid' => $node->id(),
+          '@title' => $page['title'],
+          '@lang' => $langcode,
+          '@api' => $apiTime,
+          '@queued' => !empty($result['queued']) ? 'yes' : 'no',
+        ]);
+      }
+      catch (\Exception $e) {
+        $this->logger->error('Failed to index node @nid lang=@lang: @message', [
+          '@nid' => $node->id(),
+          '@lang' => $langcode,
+          '@message' => $e->getMessage(),
+        ]);
+        $allOk = FALSE;
+      }
+    }
+    return $allOk;
   }
 
   /**
@@ -183,34 +190,62 @@ class IndexingService {
    *   TRUE on success.
    */
   public function deleteNode(NodeInterface $node): bool {
-    $key = 'node:' . $node->id();
+    $multilingual = $this->siteResolver->isMultilingual();
 
-    try {
-      // Try key-based delete first — matches the 'key' field set during ingest.
-      $result = $this->client->deletePagesByKey([$key]);
-
-      if (!$result) {
-        // Fall back to URL-based delete for backward compatibility (older
-        // documents may not have been indexed with a key).
-        $url = $node->toUrl('canonical')->toString();
-        $result = $this->client->deletePages([$url]);
-      }
-
-      if ($result) {
+    if (!$multilingual) {
+      // Legacy single-site behaviour preserved.
+      $key = 'node:' . $node->id();
+      try {
+        // Try key-based delete first — matches the 'key' field set during ingest.
+        if (!$this->client->deletePagesByKey([$key])) {
+          // Fall back to URL-based delete for backward compatibility (older
+          // documents may not have been indexed with a key).
+          $url = $node->toUrl('canonical')->toString();
+          $this->client->deletePages([$url]);
+        }
         $this->logger->info('Deleted node @nid from QuantSearch index.', [
           '@nid' => $node->id(),
         ]);
+        return TRUE;
       }
+      catch (\Exception $e) {
+        $this->logger->error('Failed to delete node @nid from index: @message', [
+          '@nid' => $node->id(),
+          '@message' => $e->getMessage(),
+        ]);
+        return FALSE;
+      }
+    }
 
-      return $result;
+    $allOk = TRUE;
+    foreach ($node->getTranslationLanguages() as $language) {
+      $langcode = $language->getId();
+      if (!in_array($langcode, $this->siteResolver->getMappedLanguages(), TRUE)) {
+        // Skip languages with no mapped site.
+        continue;
+      }
+      $key = 'node:' . $node->id() . ':' . $langcode;
+      try {
+        $translation = $node->getTranslation($langcode);
+        $url = $translation->toUrl('canonical', ['language' => $translation->language()])->toString();
+        if (!$this->client->deletePagesByKey([$key], $langcode)) {
+          $this->client->deletePages([$url], $langcode);
+        }
+        $this->logger->info('Deleted node @nid lang=@lang from QuantSearch index.', [
+          '@nid' => $node->id(),
+          '@lang' => $langcode,
+        ]);
+      }
+      catch (\Exception $e) {
+        $this->logger->error('Failed to delete node @nid lang=@lang: @message', [
+          '@nid' => $node->id(),
+          '@lang' => $langcode,
+          '@message' => $e->getMessage(),
+        ]);
+        $allOk = FALSE;
+      }
     }
-    catch (\Exception $e) {
-      $this->logger->error('Failed to delete node @nid from index: @message', [
-        '@nid' => $node->id(),
-        '@message' => $e->getMessage(),
-      ]);
-      return FALSE;
-    }
+    return $allOk;
   }
 
   /**
