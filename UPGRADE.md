@@ -17,6 +17,10 @@ To enable per-language indexing:
    - The Drupal `language` module is enabled with two or more enabled
      languages.
    - Your QuantSearch organisation has two or more sites available.
+
+   The "Multi-language site mapping" section only appears after the OAuth flow
+   in step 2 has completed — that step is what populates the list of available
+   sites under your org.
 4. For each Drupal language, choose the matching QuantSearch site. Save.
 5. Run a fresh full index — old documents must be purged first because the
    document key format changes:

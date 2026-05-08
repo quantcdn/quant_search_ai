@@ -279,6 +279,10 @@ class IndexingService {
     foreach ($node->getTranslationLanguages() as $language) {
       $langcode = $language->getId();
       if (!in_array($langcode, $mapped, TRUE)) {
+        $this->logger->debug('Skipping translation @nid lang=@lang: no QuantSearch site mapped for this language.', [
+          '@nid' => $node->id(),
+          '@lang' => $langcode,
+        ]);
         continue;
       }
       $queue->createItem([
@@ -578,6 +582,10 @@ class IndexingService {
       $langcode = $language->getId();
       if (!in_array($langcode, $mapped, TRUE)) {
         // Skip languages with no mapped site.
+        $this->logger->debug('Skipping translation @nid lang=@lang: no QuantSearch site mapped for this language.', [
+          '@nid' => $node->id(),
+          '@lang' => $langcode,
+        ]);
         continue;
       }
       $translation = $node->getTranslation($langcode);

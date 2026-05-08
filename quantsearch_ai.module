@@ -49,8 +49,7 @@ function quantsearch_ai_node_update(NodeInterface $node) {
     /** @var \Drupal\quantsearch_ai\Service\SiteResolver $resolver */
     $resolver = \Drupal::service('quantsearch_ai.site_resolver');
     if ($resolver->isMultilingual()) {
-      $config = \Drupal::config('quantsearch_ai.settings');
-      if (!$config->get('api_key_id') || !$config->get('site_id')) {
+      if (!_quantsearch_ai_is_configured()) {
         return;
       }
       /** @var \Drupal\quantsearch_ai\Service\IndexingService $indexing */
@@ -131,8 +130,7 @@ function quantsearch_ai_entity_translation_delete(EntityInterface $translation) 
     return;
   }
 
-  $config = \Drupal::config('quantsearch_ai.settings');
-  if (!$config->get('api_key_id') || !$config->get('site_id')) {
+  if (!_quantsearch_ai_is_configured()) {
     return;
   }
 
@@ -178,7 +176,7 @@ function _quantsearch_ai_index_translation(NodeInterface $translation, string $o
   if ($config->get('indexing.exclude_unpublished') && !$translation->isPublished()) {
     return;
   }
-  if (!$config->get('api_key_id') || !$config->get('site_id')) {
+  if (!_quantsearch_ai_is_configured()) {
     return;
   }
 
@@ -237,7 +235,7 @@ function _quantsearch_ai_index_node(NodeInterface $node, string $operation) {
   }
 
   // Check if we have a valid connection
-  if (!$config->get('api_key_id') || !$config->get('site_id')) {
+  if (!_quantsearch_ai_is_configured()) {
     return;
   }
 
@@ -280,10 +278,8 @@ function _quantsearch_ai_index_node(NodeInterface $node, string $operation) {
  *   The node to delete.
  */
 function _quantsearch_ai_delete_node(NodeInterface $node) {
-  $config = \Drupal::config('quantsearch_ai.settings');
-
   // Check if we have a valid connection
-  if (!$config->get('api_key_id') || !$config->get('site_id')) {
+  if (!_quantsearch_ai_is_configured()) {
     return;
   }
 
@@ -299,6 +295,27 @@ function _quantsearch_ai_delete_node(NodeInterface $node) {
       '@message' => $e->getMessage(),
     ]);
   }
+}
+
+/**
+ * Returns TRUE when the module has at least one usable QuantSearch target.
+ *
+ * The module is considered configured when an API key is present AND either
+ * a flat `site_id` is set OR a `language_sites` map is populated. This allows
+ * fully-migrated multilingual installs (which may never set the flat
+ * `site_id`) to keep functioning.
+ *
+ * @return bool
+ *   TRUE when the module has a usable target configuration.
+ */
+function _quantsearch_ai_is_configured(): bool {
+  $config = \Drupal::config('quantsearch_ai.settings');
+  if (!$config->get('api_key_id')) {
+    return FALSE;
+  }
+  /** @var \Drupal\quantsearch_ai\Service\SiteResolver $resolver */
+  $resolver = \Drupal::service('quantsearch_ai.site_resolver');
+  return $resolver->isMultilingual() || !empty($config->get('site_id'));
 }
 
 /**
