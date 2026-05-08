@@ -252,7 +252,10 @@ function _quantsearch_ai_delete_node(NodeInterface $node) {
  */
 function quantsearch_ai_page_attachments(array &$attachments) {
   $config = \Drupal::config('quantsearch_ai.settings');
-  $site_id = $config->get('site_id');
+  /** @var \Drupal\quantsearch_ai\Service\SiteResolver $resolver */
+  $resolver = \Drupal::service('quantsearch_ai.site_resolver');
+  $langcode = \Drupal::languageManager()->getCurrentLanguage()->getId();
+  $site_id = $resolver->getSiteId($langcode);
 
   if (!$site_id) {
     return;
@@ -261,7 +264,9 @@ function quantsearch_ai_page_attachments(array &$attachments) {
   // Attach chat widget settings if enabled globally (script added in hook_page_bottom)
   if ($config->get('widgets.chat.enabled')) {
     $attachments['#attached']['drupalSettings']['quantsearch_ai']['chat_enabled'] = TRUE;
+    $attachments['#attached']['drupalSettings']['quantsearch_ai']['site_id'] = $site_id;
   }
+  $attachments['#cache']['contexts'][] = 'languages:language_interface';
 }
 
 /**
@@ -271,7 +276,10 @@ function quantsearch_ai_page_attachments(array &$attachments) {
  */
 function quantsearch_ai_page_bottom(array &$page_bottom) {
   $config = \Drupal::config('quantsearch_ai.settings');
-  $site_id = $config->get('site_id');
+  /** @var \Drupal\quantsearch_ai\Service\SiteResolver $resolver */
+  $resolver = \Drupal::service('quantsearch_ai.site_resolver');
+  $langcode = \Drupal::languageManager()->getCurrentLanguage()->getId();
+  $site_id = $resolver->getSiteId($langcode);
   $cdn_url = $config->get('cdn_url') ?: 'https://cdn.quantsearch.ai/v1';
 
   if (!$site_id) {
@@ -300,6 +308,7 @@ function quantsearch_ai_page_bottom(array &$page_bottom) {
       '#tag' => 'script',
       '#attributes' => $attributes,
       '#cache' => [
+        'contexts' => ['languages:language_interface'],
         'tags' => ['config:quantsearch_ai.settings'],
       ],
     ];

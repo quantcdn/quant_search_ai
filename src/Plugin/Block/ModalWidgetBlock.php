@@ -106,7 +106,10 @@ class ModalWidgetBlock extends BlockBase {
    */
   public function build() {
     $config = \Drupal::config('quantsearch_ai.settings');
-    $site_id = $config->get('site_id');
+    $langcode = \Drupal::languageManager()->getCurrentLanguage()->getId();
+    /** @var \Drupal\quantsearch_ai\Service\SiteResolver $resolver */
+    $resolver = \Drupal::service('quantsearch_ai.site_resolver');
+    $site_id = $resolver->getSiteId($langcode);
     $cdn_url = $config->get('cdn_url') ?: 'https://cdn.quantsearch.ai/v1';
 
     if (!$site_id) {
@@ -126,6 +129,7 @@ class ModalWidgetBlock extends BlockBase {
       '#show_ai_answer' => $this->configuration['show_ai_answer'],
       '#preset_filters' => $this->configuration['preset_filters'],
       '#cache' => [
+        'contexts' => ['languages:language_interface'],
         'tags' => ['config:quantsearch_ai.settings'],
       ],
     ];
