@@ -254,13 +254,14 @@ function _quantsearch_ai_index_node(NodeInterface $node, string $operation) {
           // save, so we have to fan out here.
           $indexing->indexNode($node);
         }
-        elseif ($node->isDefaultTranslation()) {
-          // Update of the default translation: index only the saved language.
-          // Non-default translation updates fire hook_entity_translation_update.
+        else {
+          // Update: index whichever language was saved. $node->language()->getId()
+          // is the language of the entity passed to hook_node_update (which is the
+          // translation that was saved). hook_entity_translation_update may also
+          // fire for non-default translations on this same save; the resulting
+          // duplicate ingest is idempotent at the backend (same key+content).
           $indexing->indexNodeLanguage($node, $node->language()->getId());
         }
-        // else: non-default translation update — hook_entity_translation_update
-        // handles it. Skip here to avoid double-indexing.
       }
       else {
         $indexing->indexNode($node);
@@ -275,24 +276,17 @@ function _quantsearch_ai_index_node(NodeInterface $node, string $operation) {
   }
   else {
     // Queue for batch processing.
-    if ($resolver->isMultilingual()) {
-      if ($operation === 'insert') {
-        // Brand new node: enqueue every translation. queueNode handles fan-out.
-        $indexing->queueNode($node);
-      }
-      elseif ($node->isDefaultTranslation()) {
-        // Update of the default translation: enqueue only that language.
-        $queueFactory = \Drupal::service('queue');
-        $queueFactory->get('quantsearch_content_index')->createItem([
-          'nid' => $node->id(),
-          'langcode' => $node->language()->getId(),
-          'operation' => 'index',
-        ]);
-      }
-      // else: non-default translation update; hook_entity_translation_update
-      // already queued the change.
+    if ($resolver->isMultilingual() && $operation !== 'insert') {
+      // Update: enqueue only the saved language.
+      $queueFactory = \Drupal::service('queue');
+      $queueFactory->get('quantsearch_content_index')->createItem([
+        'nid' => $node->id(),
+        'langcode' => $node->language()->getId(),
+        'operation' => 'index',
+      ]);
     }
     else {
+      // Brand new multilingual node, or single-language site: queueNode handles both.
       $indexing->queueNode($node);
     }
   }
