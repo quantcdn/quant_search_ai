@@ -4,6 +4,7 @@ namespace Drupal\quantsearch_ai\Form;
 
 use Drupal\Core\Form\ConfigFormBase;
 use Drupal\Core\Form\FormStateInterface;
+use Drupal\Core\Language\LanguageManagerInterface;
 use Drupal\Core\Url;
 use Drupal\quantsearch_ai\Client\QuantSearchClient;
 use Drupal\quantsearch_ai\Service\AuthService;
@@ -29,16 +30,30 @@ class SettingsForm extends ConfigFormBase {
   protected $client;
 
   /**
+   * The language manager.
+   *
+   * @var \Drupal\Core\Language\LanguageManagerInterface
+   */
+  protected LanguageManagerInterface $languageManager;
+
+  /**
    * Constructs the form.
    *
    * @param \Drupal\quantsearch_ai\Service\AuthService $auth_service
    *   The auth service.
    * @param \Drupal\quantsearch_ai\Client\QuantSearchClient $client
    *   The QuantSearch client.
+   * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
+   *   The language manager.
    */
-  public function __construct(AuthService $auth_service, QuantSearchClient $client) {
+  public function __construct(
+    AuthService $auth_service,
+    QuantSearchClient $client,
+    LanguageManagerInterface $language_manager
+  ) {
     $this->authService = $auth_service;
     $this->client = $client;
+    $this->languageManager = $language_manager;
   }
 
   /**
@@ -47,7 +62,8 @@ class SettingsForm extends ConfigFormBase {
   public static function create(ContainerInterface $container) {
     return new static(
       $container->get('quantsearch_ai.auth'),
-      $container->get('quantsearch_ai.client')
+      $container->get('quantsearch_ai.client'),
+      $container->get('language_manager')
     );
   }
 
@@ -147,6 +163,37 @@ class SettingsForm extends ConfigFormBase {
           'class' => ['button', 'button--primary'],
         ],
       ];
+    }
+
+    // Multi-language site mapping section. Only shown when there is more than
+    // one enabled language and the org has multiple sites available.
+    $languages = $this->languageManager->getLanguages();
+    $available_sites_for_map = $config->get('available_sites') ?: [];
+
+    if (count($languages) > 1 && count($available_sites_for_map) > 1) {
+      $form['multilingual'] = [
+        '#type' => 'details',
+        '#title' => $this->t('Multi-language site mapping'),
+        '#description' => $this->t('Map each Drupal language to a separate QuantSearch site. Each site will index only that language\'s content. Leave a language unset to fall back to the default site selected above.'),
+        '#open' => TRUE,
+        '#tree' => TRUE,
+      ];
+
+      $site_options = ['' => $this->t('— Use default site —')];
+      foreach ($available_sites_for_map as $site) {
+        $site_options[$site['id']] = $site['name'] . ' (' . ($site['baseUrl'] ?? $site['id']) . ')';
+      }
+
+      $current_map = $config->get('language_sites') ?: [];
+
+      foreach ($languages as $langcode => $language) {
+        $form['multilingual']['language_sites'][$langcode] = [
+          '#type' => 'select',
+          '#title' => $language->getName() . ' (' . $langcode . ')',
+          '#options' => $site_options,
+          '#default_value' => $current_map[$langcode]['site_id'] ?? '',
+        ];
+      }
     }
 
     // API Settings Section
@@ -402,6 +449,34 @@ class SettingsForm extends ConfigFormBase {
     $config->set('widgets.chat.color', $form_state->getValue('chat_color'));
     $config->set('widgets.chat.placeholder', $form_state->getValue('chat_placeholder'));
     $config->set('widgets.chat.greeting', $form_state->getValue('chat_greeting'));
+
+    // Multi-language site mapping. Only persist when the multilingual section
+    // was actually rendered (which produces an array form value). If only one
+    // language is enabled, or only one site is available, the section is
+    // skipped and getValue() returns NULL — in that case do NOT touch
+    // language_sites or we would clobber a previously-saved mapping.
+    $multilingual_input = $form_state->getValue(['multilingual', 'language_sites']);
+    if (is_array($multilingual_input)) {
+      $available_sites = $config->get('available_sites') ?: [];
+      $sites_by_id = [];
+      foreach ($available_sites as $site) {
+        $sites_by_id[$site['id']] = $site;
+      }
+
+      $language_map = [];
+      foreach ($multilingual_input as $langcode => $site_id) {
+        if (empty($site_id) || !isset($sites_by_id[$site_id])) {
+          continue;
+        }
+        $language_map[$langcode] = [
+          'site_id' => $site_id,
+          'site_name' => $sites_by_id[$site_id]['name'] ?? '',
+          'base_url' => $sites_by_id[$site_id]['baseUrl'] ?? '',
+        ];
+      }
+
+      $config->set('language_sites', $language_map);
+    }
 
     $config->save();
 

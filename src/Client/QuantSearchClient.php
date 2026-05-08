@@ -5,6 +5,7 @@ namespace Drupal\quantsearch_ai\Client;
 use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\Core\Logger\LoggerChannelFactoryInterface;
 use Drupal\key\KeyRepositoryInterface;
+use Drupal\quantsearch_ai\Service\SiteResolver;
 use GuzzleHttp\ClientInterface;
 use GuzzleHttp\Exception\GuzzleException;
 
@@ -42,6 +43,13 @@ class QuantSearchClient {
   protected $keyRepository;
 
   /**
+   * The site resolver.
+   *
+   * @var \Drupal\quantsearch_ai\Service\SiteResolver
+   */
+  protected SiteResolver $siteResolver;
+
+  /**
    * Constructs a QuantSearchClient.
    *
    * @param \GuzzleHttp\ClientInterface $http_client
@@ -52,17 +60,21 @@ class QuantSearchClient {
    *   The logger factory.
    * @param \Drupal\key\KeyRepositoryInterface $key_repository
    *   The key repository.
+   * @param \Drupal\quantsearch_ai\Service\SiteResolver $site_resolver
+   *   The site resolver.
    */
   public function __construct(
     ClientInterface $http_client,
     ConfigFactoryInterface $config_factory,
     LoggerChannelFactoryInterface $logger_factory,
-    KeyRepositoryInterface $key_repository
+    KeyRepositoryInterface $key_repository,
+    SiteResolver $site_resolver
   ) {
     $this->httpClient = $http_client;
     $this->configFactory = $config_factory;
     $this->logger = $logger_factory->get('quantsearch_ai');
     $this->keyRepository = $key_repository;
+    $this->siteResolver = $site_resolver;
   }
 
   /**
@@ -103,33 +115,44 @@ class QuantSearchClient {
   /**
    * Gets the API base URL.
    *
+   * The API endpoint is shared across all languages — it's QuantSearch's API,
+   * not the customer's site URL. The $langcode parameter is accepted for
+   * signature symmetry with getSiteId() but does not vary the result.
+   *
+   * @param string|null $langcode
+   *   Reserved for future use; currently ignored.
+   *
    * @return string
    *   The API base URL.
    */
-  protected function getBaseUrl(): string {
-    $config = $this->configFactory->get('quantsearch_ai.settings');
-    return $config->get('api_endpoint') ?: 'https://quantsearch.ai/api';
+  protected function getBaseUrl(?string $langcode = NULL): string {
+    return $this->siteResolver->getApiEndpoint();
   }
 
   /**
-   * Gets the site ID.
+   * Gets the site ID, optionally for a specific language.
+   *
+   * @param string|null $langcode
+   *   The langcode to resolve, or NULL to use the flat fallback.
    *
    * @return string|null
    *   The site ID or NULL.
    */
-  protected function getSiteId(): ?string {
-    $config = $this->configFactory->get('quantsearch_ai.settings');
-    return $config->get('site_id');
+  protected function getSiteId(?string $langcode = NULL): ?string {
+    return $this->siteResolver->getSiteId($langcode);
   }
 
   /**
    * Checks if the client is configured.
    *
+   * @param string|null $langcode
+   *   The langcode to check configuration for, or NULL for the flat fallback.
+   *
    * @return bool
    *   TRUE if configured, FALSE otherwise.
    */
-  public function isConfigured(): bool {
-    return !empty($this->getApiKey()) && !empty($this->getSiteId());
+  public function isConfigured(?string $langcode = NULL): bool {
+    return !empty($this->getApiKey()) && !empty($this->getSiteId($langcode));
   }
 
   /**
@@ -147,8 +170,8 @@ class QuantSearchClient {
    * @throws \Exception
    *   If the request fails.
    */
-  public function ingestPages(array $pages, bool $wait = NULL): array {
-    $site_id = $this->getSiteId();
+  public function ingestPages(array $pages, bool $wait = NULL, ?string $langcode = NULL): array {
+    $site_id = $this->getSiteId($langcode);
     if (!$site_id) {
       throw new \Exception('Site ID not configured');
     }
@@ -193,8 +216,8 @@ class QuantSearchClient {
    * @throws \Exception
    *   If the request fails.
    */
-  public function deletePages(array $urls): bool {
-    $site_id = $this->getSiteId();
+  public function deletePages(array $urls, ?string $langcode = NULL): bool {
+    $site_id = $this->getSiteId($langcode);
     if (!$site_id) {
       throw new \Exception('Site ID not configured');
     }
@@ -231,8 +254,8 @@ class QuantSearchClient {
    * @return bool
    *   TRUE on success, FALSE if the backend returned an error.
    */
-  public function deletePagesByKey(array $keys): bool {
-    $site_id = $this->getSiteId();
+  public function deletePagesByKey(array $keys, ?string $langcode = NULL): bool {
+    $site_id = $this->getSiteId($langcode);
     if (!$site_id) {
       throw new \Exception('Site ID not configured');
     }
@@ -265,8 +288,8 @@ class QuantSearchClient {
    * @return string|null
    *   The job ID or NULL on failure.
    */
-  public function triggerCrawl(array $options = []): ?string {
-    $site_id = $this->getSiteId();
+  public function triggerCrawl(array $options = [], ?string $langcode = NULL): ?string {
+    $site_id = $this->getSiteId($langcode);
     if (!$site_id) {
       throw new \Exception('Site ID not configured');
     }
@@ -300,8 +323,8 @@ class QuantSearchClient {
    * @return array|null
    *   The job status or NULL.
    */
-  public function getCrawlStatus(string $job_id): ?array {
-    $site_id = $this->getSiteId();
+  public function getCrawlStatus(string $job_id, ?string $langcode = NULL): ?array {
+    $site_id = $this->getSiteId($langcode);
     if (!$site_id) {
       return NULL;
     }
@@ -356,8 +379,8 @@ class QuantSearchClient {
    * @return bool
    *   TRUE on success.
    */
-  public function purgeIndex(): bool {
-    $site_id = $this->getSiteId();
+  public function purgeIndex(?string $langcode = NULL): bool {
+    $site_id = $this->getSiteId($langcode);
     if (!$site_id) {
       return FALSE;
     }

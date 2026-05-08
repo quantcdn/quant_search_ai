@@ -10,6 +10,7 @@ use Drupal\Core\Queue\QueueFactory;
 use Drupal\Core\Render\RendererInterface;
 use Drupal\node\NodeInterface;
 use Drupal\quantsearch_ai\Client\QuantSearchClient;
+use Drupal\quantsearch_ai\Service\SiteResolver;
 
 /**
  * Service for indexing content to QuantSearch.
@@ -66,6 +67,13 @@ class IndexingService {
   protected $renderer;
 
   /**
+   * The site resolver.
+   *
+   * @var \Drupal\quantsearch_ai\Service\SiteResolver
+   */
+  protected SiteResolver $siteResolver;
+
+  /**
    * Constructs the IndexingService.
    *
    * @param \Drupal\quantsearch_ai\Client\QuantSearchClient $client
@@ -82,6 +90,8 @@ class IndexingService {
    *   The module handler.
    * @param \Drupal\Core\Render\RendererInterface $renderer
    *   The renderer.
+   * @param \Drupal\quantsearch_ai\Service\SiteResolver $site_resolver
+   *   The site resolver.
    */
   public function __construct(
     QuantSearchClient $client,
@@ -90,7 +100,8 @@ class IndexingService {
     LoggerChannelFactoryInterface $logger_factory,
     QueueFactory $queue_factory,
     ModuleHandlerInterface $module_handler,
-    RendererInterface $renderer
+    RendererInterface $renderer,
+    SiteResolver $site_resolver
   ) {
     $this->client = $client;
     $this->entityTypeManager = $entity_type_manager;
@@ -99,6 +110,7 @@ class IndexingService {
     $this->queueFactory = $queue_factory;
     $this->moduleHandler = $module_handler;
     $this->renderer = $renderer;
+    $this->siteResolver = $site_resolver;
   }
 
   /**
@@ -115,29 +127,124 @@ class IndexingService {
       return FALSE;
     }
 
-    $start = microtime(TRUE);
-    $page = $this->nodeToPage($node);
-    $prepTime = round((microtime(TRUE) - $start) * 1000);
+    $entries = $this->nodeToPages($node);
+    if (empty($entries)) {
+      return FALSE;
+    }
 
-    try {
+    $allOk = TRUE;
+    foreach ($entries as $entry) {
+      $langcode = $entry['langcode'];
+      $page = $entry['page'];
       $apiStart = microtime(TRUE);
-      // Single page = wait=false (fire-and-forget)
-      $result = $this->client->ingestPages([$page], FALSE);
-      $apiTime = round((microtime(TRUE) - $apiStart) * 1000);
+      try {
+        // Single page per language = wait=false (fire-and-forget). Pass NULL
+        // langcode for non-multilingual sites to preserve legacy behaviour.
+        $result = $this->client->ingestPages([$page], FALSE, $this->siteResolver->isMultilingual() ? $langcode : NULL);
+        $apiTime = round((microtime(TRUE) - $apiStart) * 1000);
+        $this->logger->info('Indexed node @nid (@title) lang=@lang. API: @api ms, Queued: @queued', [
+          '@nid' => $node->id(),
+          '@title' => $page['title'],
+          '@lang' => $langcode,
+          '@api' => $apiTime,
+          '@queued' => !empty($result['queued']) ? 'yes' : 'no',
+        ]);
+      }
+      catch (\Exception $e) {
+        $this->logger->error('Failed to index node @nid lang=@lang: @message', [
+          '@nid' => $node->id(),
+          '@lang' => $langcode,
+          '@message' => $e->getMessage(),
+        ]);
+        $allOk = FALSE;
+      }
+    }
+    return $allOk;
+  }
 
-      $this->logger->info('Indexed node @nid (@title) to QuantSearch. Prep: @prep ms, API: @api ms, Queued: @queued', [
+  /**
+   * Indexes just one translation of a node.
+   *
+   * Single-translation counterpart to {@see indexNode()}. Used by the queue
+   * worker when a queue item carries a langcode (per-translation processing).
+   *
+   * @param \Drupal\node\NodeInterface $node
+   *   The node whose translation to index.
+   * @param string $langcode
+   *   The langcode of the translation to index.
+   *
+   * @return bool
+   *   TRUE on success, FALSE if the translation is not indexable or the
+   *   ingest call failed.
+   */
+  public function indexNodeLanguage(NodeInterface $node, string $langcode): bool {
+    if (!$this->shouldIndex($node)) {
+      return FALSE;
+    }
+    if (!$node->hasTranslation($langcode)) {
+      return FALSE;
+    }
+    if ($this->siteResolver->isMultilingual()
+        && !in_array($langcode, $this->siteResolver->getMappedLanguages(), TRUE)) {
+      return FALSE;
+    }
+    $passLang = $this->siteResolver->isMultilingual() ? $langcode : NULL;
+    $page = $this->nodeToPage($node, $passLang);
+    try {
+      $this->client->ingestPages([$page], FALSE, $passLang);
+      $this->logger->info('Indexed node @nid lang=@lang.', [
         '@nid' => $node->id(),
-        '@title' => $node->getTitle(),
-        '@prep' => $prepTime,
-        '@api' => $apiTime,
-        '@queued' => $result['queued'] ?? FALSE ? 'yes' : 'no',
+        '@lang' => $langcode,
       ]);
       return TRUE;
     }
     catch (\Exception $e) {
-      $this->logger->error('Failed to index node @nid: @message', [
+      $this->logger->error('Failed to index node @nid lang=@lang: @msg', [
         '@nid' => $node->id(),
-        '@message' => $e->getMessage(),
+        '@lang' => $langcode,
+        '@msg' => $e->getMessage(),
+      ]);
+      return FALSE;
+    }
+  }
+
+  /**
+   * Deletes just one translation of a node from its language's site.
+   *
+   * Single-translation counterpart to {@see deleteNode()}. Used by the queue
+   * worker when a queue item carries a langcode.
+   *
+   * @param \Drupal\node\NodeInterface $node
+   *   The node whose translation to delete.
+   * @param string $langcode
+   *   The langcode of the translation to delete.
+   *
+   * @return bool
+   *   TRUE on success, FALSE on failure.
+   */
+  public function deleteNodeLanguage(NodeInterface $node, string $langcode): bool {
+    $multilingual = $this->siteResolver->isMultilingual();
+    $key = $multilingual ? 'node:' . $node->id() . ':' . $langcode : 'node:' . $node->id();
+    try {
+      $passLang = $multilingual ? $langcode : NULL;
+      if (!$this->client->deletePagesByKey([$key], $passLang)) {
+        if ($node->hasTranslation($langcode)) {
+          $translation = $node->getTranslation($langcode);
+          $url = $translation->toUrl('canonical', ['language' => $translation->language()])->toString();
+          $this->client->deletePages([$url], $passLang);
+        }
+      }
+      $this->logger->info('Deleted node @nid lang=@lang from QuantSearch index.', [
+        '@nid' => $node->id(),
+        '@lang' => $langcode,
+      ]);
+      return TRUE;
+    }
+    catch (\Exception $e) {
+      $this->logger->error('Failed to delete node @nid lang=@lang: @msg', [
+        '@nid' => $node->id(),
+        '@lang' => $langcode,
+        '@msg' => $e->getMessage(),
       ]);
       return FALSE;
     }
@@ -145,6 +252,10 @@ class IndexingService {
 
   /**
    * Queues a node for batch indexing.
+   *
+   * On multilingual sites, enqueues one item per mapped translation so the
+   * queue worker can process each translation independently. Single-language
+   * sites enqueue a single item without a langcode (legacy payload).
    *
    * @param \Drupal\node\NodeInterface $node
    *   The node to queue.
@@ -155,10 +266,31 @@ class IndexingService {
     }
 
     $queue = $this->queueFactory->get('quantsearch_content_index');
-    $queue->createItem([
-      'nid' => $node->id(),
-      'operation' => 'index',
-    ]);
+
+    if (!$this->siteResolver->isMultilingual()) {
+      $queue->createItem([
+        'nid' => $node->id(),
+        'operation' => 'index',
+      ]);
+      return;
+    }
+
+    $mapped = $this->siteResolver->getMappedLanguages();
+    foreach ($node->getTranslationLanguages() as $language) {
+      $langcode = $language->getId();
+      if (!in_array($langcode, $mapped, TRUE)) {
+        $this->logger->debug('Skipping translation @nid lang=@lang: no QuantSearch site mapped for this language.', [
+          '@nid' => $node->id(),
+          '@lang' => $langcode,
+        ]);
+        continue;
+      }
+      $queue->createItem([
+        'nid' => $node->id(),
+        'langcode' => $langcode,
+        'operation' => 'index',
+      ]);
+    }
   }
 
   /**
@@ -171,34 +303,72 @@ class IndexingService {
    *   TRUE on success.
    */
   public function deleteNode(NodeInterface $node): bool {
-    $key = 'node:' . $node->id();
+    $multilingual = $this->siteResolver->isMultilingual();
 
-    try {
-      // Try key-based delete first — matches the 'key' field set during ingest.
-      $result = $this->client->deletePagesByKey([$key]);
-
-      if (!$result) {
-        // Fall back to URL-based delete for backward compatibility (older
-        // documents may not have been indexed with a key).
-        $url = $node->toUrl('canonical')->toString();
-        $result = $this->client->deletePages([$url]);
+    if (!$multilingual) {
+      // Legacy single-site behaviour preserved.
+      $key = 'node:' . $node->id();
+      try {
+        // Try key-based delete first — matches the 'key' field set during
+        // ingest. Fall back to URL-based delete for backward compatibility
+        // (older documents may not have been indexed with a key). Track the
+        // actual client result so callers can react to backend rejection
+        // rather than always seeing a TRUE.
+        $result = $this->client->deletePagesByKey([$key]);
+        if (!$result) {
+          $url = $node->toUrl('canonical')->toString();
+          $result = $this->client->deletePages([$url]);
+        }
+        if ($result) {
+          $this->logger->info('Deleted node @nid from QuantSearch index.', [
+            '@nid' => $node->id(),
+          ]);
+        }
+        else {
+          $this->logger->warning('Backend rejected delete for node @nid.', [
+            '@nid' => $node->id(),
+          ]);
+        }
+        return (bool) $result;
       }
-
-      if ($result) {
-        $this->logger->info('Deleted node @nid from QuantSearch index.', [
+      catch (\Exception $e) {
+        $this->logger->error('Failed to delete node @nid from index: @message', [
           '@nid' => $node->id(),
+          '@message' => $e->getMessage(),
+        ]);
+        return FALSE;
+      }
+    }
+
+    $allOk = TRUE;
+    foreach ($node->getTranslationLanguages() as $language) {
+      $langcode = $language->getId();
+      if (!in_array($langcode, $this->siteResolver->getMappedLanguages(), TRUE)) {
+        // Skip languages with no mapped site.
+        continue;
+      }
+      $key = 'node:' . $node->id() . ':' . $langcode;
+      try {
+        $translation = $node->getTranslation($langcode);
+        $url = $translation->toUrl('canonical', ['language' => $translation->language()])->toString();
+        if (!$this->client->deletePagesByKey([$key], $langcode)) {
+          $this->client->deletePages([$url], $langcode);
+        }
+        $this->logger->info('Deleted node @nid lang=@lang from QuantSearch index.', [
+          '@nid' => $node->id(),
+          '@lang' => $langcode,
         ]);
       }
-
-      return $result;
+      catch (\Exception $e) {
+        $this->logger->error('Failed to delete node @nid lang=@lang: @message', [
+          '@nid' => $node->id(),
+          '@lang' => $langcode,
+          '@message' => $e->getMessage(),
+        ]);
+        $allOk = FALSE;
+      }
     }
-    catch (\Exception $e) {
-      $this->logger->error('Failed to delete node @nid from index: @message', [
-        '@nid' => $node->id(),
-        '@message' => $e->getMessage(),
-      ]);
-      return FALSE;
-    }
+    return $allOk;
   }
 
   /**
@@ -206,10 +376,17 @@ class IndexingService {
    *
    * Clears the existing queue first to prevent duplicates.
    *
+   * @param string|null $langcode
+   *   Optional Drupal langcode to limit indexing to a specific language.
+   *   When NULL (the default), one fan-out queue item is enqueued per node
+   *   and the queue worker indexes all mapped languages. When a langcode is
+   *   provided, it is stamped on the queue payload so the worker only
+   *   indexes that language's translation (skipping nodes that lack it).
+   *
    * @return int
    *   The number of nodes queued.
    */
-  public function queueFullIndex(): int {
+  public function queueFullIndex(?string $langcode = NULL): int {
     $config = $this->configFactory->get('quantsearch_ai.settings');
     $content_types = $config->get('indexing.content_types') ?: [];
 
@@ -230,10 +407,14 @@ class IndexingService {
     $nids = $query->execute();
 
     foreach ($nids as $nid) {
-      $queue->createItem([
+      $payload = [
         'nid' => $nid,
         'operation' => 'index',
-      ]);
+      ];
+      if ($langcode !== NULL) {
+        $payload['langcode'] = $langcode;
+      }
+      $queue->createItem($payload);
     }
 
     $this->logger->info('Queued @count nodes for full re-index.', [
@@ -369,6 +550,63 @@ class IndexingService {
   }
 
   /**
+   * Converts a node to one page per indexable translation.
+   *
+   * When the site is multilingual (a `language_sites` map is configured), one
+   * page is produced for every translation whose langcode is mapped. Unmapped
+   * translations are skipped. When not multilingual, a single entry using the
+   * node's current language is returned with the legacy `node:{nid}` key.
+   *
+   * @param \Drupal\node\NodeInterface $node
+   *   The node to convert.
+   *
+   * @return array<int, array{langcode: string, page: array}>
+   *   Each entry has the langcode and the page payload.
+   */
+  public function nodeToPages(NodeInterface $node): array {
+    $multilingual = $this->siteResolver->isMultilingual();
+    $mapped = $this->siteResolver->getMappedLanguages();
+    $results = [];
+
+    if (!$multilingual) {
+      // Single-language site: keep legacy key format for backwards compat.
+      $page = $this->nodeToPage($node, NULL);
+      $results[] = ['langcode' => $node->language()->getId(), 'page' => $page];
+      return $results;
+    }
+
+    $config = $this->configFactory->get('quantsearch_ai.settings');
+    $exclude_unpublished = (bool) $config->get('indexing.exclude_unpublished');
+
+    foreach ($node->getTranslationLanguages() as $language) {
+      $langcode = $language->getId();
+      if (!in_array($langcode, $mapped, TRUE)) {
+        // Skip languages with no mapped site.
+        $this->logger->debug('Skipping translation @nid lang=@lang: no QuantSearch site mapped for this language.', [
+          '@nid' => $node->id(),
+          '@lang' => $langcode,
+        ]);
+        continue;
+      }
+      $translation = $node->getTranslation($langcode);
+      // Honour exclude_unpublished per translation: each translation has its
+      // own published flag, so an unpublished French version must not leak
+      // into the French site even when the English default is published.
+      if ($exclude_unpublished && !$translation->isPublished()) {
+        continue;
+      }
+      $results[] = [
+        'langcode' => $langcode,
+        // Pass the original node + langcode; nodeToPage() resolves the
+        // translation itself.
+        'page' => $this->nodeToPage($node, $langcode),
+      ];
+    }
+
+    return $results;
+  }
+
+  /**
    * Converts a node to QuantSearch page format.
    *
    * Renders the node using its view mode to capture full content including
@@ -376,31 +614,45 @@ class IndexingService {
    *
    * @param \Drupal\node\NodeInterface $node
    *   The node to convert.
+   * @param string|null $langcode
+   *   Optional langcode. When provided, the page is built from the matching
+   *   translation and the key includes the langcode for collision-free
+   *   per-language indexing.
    *
    * @return array
    *   The page data.
    */
-  protected function nodeToPage(NodeInterface $node): array {
+  protected function nodeToPage(NodeInterface $node, ?string $langcode = NULL): array {
     $config = $this->configFactory->get('quantsearch_ai.settings');
     $view_mode = $config->get('indexing.view_mode') ?: 'full';
 
-    // Get relative URL path (QuantSearch stores relative URLs for consistency)
-    $url = $node->toUrl('canonical')->toString();
+    // URL + title: when multilingual, prefer the language-specific translation
+    // so URL aliases and titles come from the right language.
+    if ($langcode !== NULL) {
+      $translation = $node->getTranslation($langcode);
+      $url = $node->toUrl('canonical', ['language' => $translation->language()])->toString();
+      $title = $translation->getTitle();
+    }
+    else {
+      $url = $node->toUrl('canonical')->toString();
+      $title = $node->getTitle();
+    }
 
-    // Extract title
-    $title = $node->getTitle();
-
-    // Render the node using the configured view mode
+    // Render the node (translation when multilingual) using the configured
+    // view mode.
+    $render_target = $langcode !== NULL ? $node->getTranslation($langcode) : $node;
     $view_builder = $this->entityTypeManager->getViewBuilder('node');
-    $build = $view_builder->view($node, $view_mode);
+    $build = $view_builder->view($render_target, $view_mode);
     $content = (string) $this->renderer->renderPlain($build);
 
     // Clean up the HTML - remove scripts, styles, comments, nav elements
     $content = $this->cleanHtml($content);
 
-    // Extract tags from taxonomy fields (auto-detect)
+    // Extract tags from taxonomy fields (auto-detect). Use the per-language
+    // render target so translatable taxonomy references resolve in the right
+    // language.
     $tags = [];
-    foreach ($node->getFields() as $field_name => $field) {
+    foreach ($render_target->getFields() as $field_name => $field) {
       $field_def = $field->getFieldDefinition();
       if ($field_def->getType() === 'entity_reference') {
         $settings = $field_def->getSettings();
@@ -432,7 +684,7 @@ class IndexingService {
       $metadataKey = $mapping['metadata_key'] ?? '';
       $fieldType = $mapping['type'] ?? 'string';
 
-      if (empty($drupalField) || empty($metadataKey) || !$node->hasField($drupalField)) {
+      if (empty($drupalField) || empty($metadataKey) || !$render_target->hasField($drupalField)) {
         continue;
       }
 
@@ -444,7 +696,7 @@ class IndexingService {
         continue;
       }
 
-      $field = $node->get($drupalField);
+      $field = $render_target->get($drupalField);
       if ($field->isEmpty()) {
         continue;
       }
@@ -484,6 +736,11 @@ class IndexingService {
     // Always include content_type.
     $metadata['content_type'] = $node->bundle();
 
+    // Key: include langcode when multilingual so collisions cannot occur.
+    $key = $langcode !== NULL
+      ? 'node:' . $node->id() . ':' . $langcode
+      : 'node:' . $node->id();
+
     $page = [
       'url' => $url,
       'title' => $title,
@@ -491,9 +748,13 @@ class IndexingService {
       'contentType' => 'html',
       'tags' => array_values(array_unique($tags)),
       'fetchedAt' => date('c'),
-      'key' => 'node:' . $node->id(),
+      'key' => $key,
       'metadata' => !empty($metadata) ? $metadata : NULL,
     ];
+
+    if ($langcode !== NULL) {
+      $page['language'] = $langcode;
+    }
 
     // Allow other modules to alter the page data.
     $this->moduleHandler->alter('quantsearch_ai_page', $page, $node);

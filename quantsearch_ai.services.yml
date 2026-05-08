@@ -6,6 +6,7 @@ services:
       - '@config.factory'
       - '@logger.factory'
       - '@key.repository'
+      - '@quantsearch_ai.site_resolver'
 
   quantsearch_ai.auth:
     class: Drupal\quantsearch_ai\Service\AuthService
@@ -25,3 +26,9 @@ services:
       - '@queue'
       - '@module_handler'
       - '@renderer'
+      - '@quantsearch_ai.site_resolver'
+
+  quantsearch_ai.site_resolver:
+    class: Drupal\quantsearch_ai\Service\SiteResolver
+    arguments:
+      - '@config.factory'

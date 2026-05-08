@@ -130,6 +130,16 @@ function mymodule_quantsearch_ai_page_alter(array &$page, NodeInterface $node) {
 }
 ```
 
+## Multi-language sites
+
+When the Drupal `language` module is active and your QuantSearch organisation
+has multiple sites, you can map each Drupal language to a separate QuantSearch
+site. Each language's translations are indexed into their own site, and the
+search/chat widgets on a French page automatically target the French site.
+
+See [UPGRADE.md](UPGRADE.md) for setup steps and the per-language Drush
+commands (`drush qs-index --language=fr`, etc.).
+
 ## Troubleshooting
 
 ### Content not appearing in search

@@ -4,6 +4,7 @@ namespace Drupal\quantsearch_ai\Commands;
 
 use Drupal\quantsearch_ai\Client\QuantSearchClient;
 use Drupal\quantsearch_ai\Service\IndexingService;
+use Drupal\quantsearch_ai\Service\SiteResolver;
 use Drush\Commands\DrushCommands;
 
 /**
@@ -26,34 +27,57 @@ class QuantSearchCommands extends DrushCommands {
   protected $client;
 
   /**
+   * The site resolver.
+   *
+   * @var \Drupal\quantsearch_ai\Service\SiteResolver
+   */
+  protected $siteResolver;
+
+  /**
    * Constructs the commands.
    *
    * @param \Drupal\quantsearch_ai\Service\IndexingService $indexing_service
    *   The indexing service.
    * @param \Drupal\quantsearch_ai\Client\QuantSearchClient $client
    *   The QuantSearch client.
+   * @param \Drupal\quantsearch_ai\Service\SiteResolver $site_resolver
+   *   The site resolver, used to validate --language and to enumerate
+   *   mapped languages on multilingual installs.
    */
-  public function __construct(IndexingService $indexing_service, QuantSearchClient $client) {
+  public function __construct(IndexingService $indexing_service, QuantSearchClient $client, SiteResolver $site_resolver) {
     parent::__construct();
     $this->indexingService = $indexing_service;
     $this->client = $client;
+    $this->siteResolver = $site_resolver;
   }
 
   /**
    * Queue all content for indexing to QuantSearch.
    *
+   * @param array $options
+   *   Command options.
+   *
    * @command quantsearch:index
    * @aliases qs-index
+   * @option language Filter to a specific Drupal language (e.g. en, fr) or "all".
    * @usage quantsearch:index
-   *   Queue all configured content types for indexing.
+   *   Queue all configured content types for indexing across every mapped language.
+   * @usage quantsearch:index --language=fr
+   *   Queue indexing for the French translation of every published node only.
    */
-  public function index() {
+  public function index(array $options = ['language' => 'all']) {
     if (!$this->client->isConfigured()) {
       $this->logger()->error('QuantSearch is not configured. Please connect to QuantSearch first.');
       return;
     }
 
-    $count = $this->indexingService->queueFullIndex();
+    $langcode = $this->resolveLangcodeOption($options['language']);
+    if ($langcode === FALSE) {
+      $this->logger()->error(dt('Unknown or unmapped language: @lang', ['@lang' => $options['language']]));
+      return;
+    }
+
+    $count = $this->indexingService->queueFullIndex($langcode);
     $this->logger()->success(dt('Queued @count nodes for indexing.', ['@count' => $count]));
   }
 
@@ -107,26 +131,50 @@ class QuantSearchCommands extends DrushCommands {
    * @command quantsearch:crawl
    * @aliases qs-crawl
    * @option max-pages Maximum pages to crawl (default: 100)
+   * @option language Filter to a specific Drupal language (e.g. en, fr) or "all".
    * @usage quantsearch:crawl --max-pages=500
-   *   Start a crawl with up to 500 pages.
+   *   Start a crawl with up to 500 pages across every mapped language.
+   * @usage quantsearch:crawl --language=fr
+   *   Trigger a crawl only for the French language site.
    */
-  public function crawl(array $options = ['max-pages' => 100]) {
+  public function crawl(array $options = ['max-pages' => 100, 'language' => 'all']) {
     if (!$this->client->isConfigured()) {
       $this->logger()->error('QuantSearch is not configured. Please connect to QuantSearch first.');
       return;
     }
 
     $max_pages = (int) $options['max-pages'];
-    $job_id = $this->client->triggerCrawl([
-      'maxPages' => $max_pages,
-    ]);
 
-    if ($job_id) {
-      $this->logger()->success(dt('Crawl started. Job ID: @id', ['@id' => $job_id]));
-      $this->output()->writeln(dt('Use "drush qs-status @id" to check progress.', ['@id' => $job_id]));
+    $langs = $this->resolveLangcodeList($options['language']);
+    if ($langs === FALSE) {
+      $this->logger()->error(dt('Unknown or unmapped language: @lang', ['@lang' => $options['language']]));
+      return;
     }
-    else {
-      $this->logger()->error('Failed to start crawl. Check the logs for details.');
+
+    $any_failed = FALSE;
+    foreach ($langs as $langcode) {
+      $label = $langcode ?? 'default';
+      $this->output()->writeln(dt('Triggering crawl for language: @lang', ['@lang' => $label]));
+      $job_id = $this->client->triggerCrawl(['maxPages' => $max_pages], $langcode);
+
+      if ($job_id) {
+        $this->logger()->success(dt('Crawl started for @lang. Job ID: @id', [
+          '@lang' => $label,
+          '@id' => $job_id,
+        ]));
+        $this->output()->writeln(dt('Use "drush qs-status @id" to check progress.', ['@id' => $job_id]));
+      }
+      else {
+        $this->logger()->error(dt('Failed to start crawl for @lang. Check the logs for details.', [
+          '@lang' => $label,
+        ]));
+        $any_failed = TRUE;
+      }
+    }
+
+    if ($any_failed) {
+      // Non-zero exit-ish via DrushCommands convention: surface the failure.
+      return;
     }
   }
 
@@ -169,14 +217,26 @@ class QuantSearchCommands extends DrushCommands {
   /**
    * Purge all indexed content from QuantSearch.
    *
+   * @param array $options
+   *   Command options.
+   *
    * @command quantsearch:purge
    * @aliases qs-purge
+   * @option language Filter to a specific Drupal language (e.g. en, fr) or "all".
    * @usage quantsearch:purge
-   *   Purge the entire search index.
+   *   Purge the entire search index for every mapped language.
+   * @usage quantsearch:purge --language=fr
+   *   Purge only the French language site.
    */
-  public function purge() {
+  public function purge(array $options = ['language' => 'all']) {
     if (!$this->client->isConfigured()) {
       $this->logger()->error('QuantSearch is not configured.');
+      return;
+    }
+
+    $langs = $this->resolveLangcodeList($options['language']);
+    if ($langs === FALSE) {
+      $this->logger()->error(dt('Unknown or unmapped language: @lang', ['@lang' => $options['language']]));
       return;
     }
 
@@ -185,14 +245,81 @@ class QuantSearchCommands extends DrushCommands {
       return;
     }
 
-    $success = $this->client->purgeIndex();
+    $any_failed = FALSE;
+    foreach ($langs as $langcode) {
+      $label = $langcode ?? 'default';
+      $this->output()->writeln(dt('Purging site for language: @lang', ['@lang' => $label]));
+      $success = $this->client->purgeIndex($langcode);
 
-    if ($success) {
-      $this->logger()->success('Search index purged successfully.');
+      if ($success) {
+        $this->logger()->success(dt('Search index purged for @lang.', ['@lang' => $label]));
+      }
+      else {
+        $this->logger()->error(dt('Failed to purge index for @lang. Check the logs for details.', [
+          '@lang' => $label,
+        ]));
+        $any_failed = TRUE;
+      }
     }
-    else {
-      $this->logger()->error('Failed to purge index. Check the logs for details.');
+
+    if ($any_failed) {
+      return;
     }
+  }
+
+  /**
+   * Resolves the --language option to a single langcode (or NULL for "all").
+   *
+   * @param string $option
+   *   The raw value passed to --language.
+   *
+   * @return string|null|false
+   *   NULL when "all" or empty (cover all languages), a string langcode when
+   *   the option matches a mapped language, or FALSE when the supplied value
+   *   is not valid for the current install.
+   */
+  protected function resolveLangcodeOption(string $option) {
+    if ($option === '' || $option === 'all') {
+      return NULL;
+    }
+    if (!$this->siteResolver->isMultilingual()) {
+      // Single-language install: only "all" is meaningful.
+      return FALSE;
+    }
+    $mapped = $this->siteResolver->getMappedLanguages();
+    if (!in_array($option, $mapped, TRUE)) {
+      return FALSE;
+    }
+    return $option;
+  }
+
+  /**
+   * Resolves the --language option to a list of langcodes to iterate over.
+   *
+   * Used by purge/crawl which need to call the API once per mapped language
+   * on multilingual installs (or once with NULL on single-language installs).
+   *
+   * @param string $option
+   *   The raw value passed to --language.
+   *
+   * @return array|false
+   *   An array of langcodes (or [NULL] for the default site on single-language
+   *   installs), or FALSE if the option is invalid.
+   */
+  protected function resolveLangcodeList(string $option) {
+    $is_all = $option === '' || $option === 'all';
+    if (!$this->siteResolver->isMultilingual()) {
+      // Single-language install: only "all" is meaningful.
+      return $is_all ? [NULL] : FALSE;
+    }
+    if ($is_all) {
+      return $this->siteResolver->getMappedLanguages();
+    }
+    $mapped = $this->siteResolver->getMappedLanguages();
+    if (!in_array($option, $mapped, TRUE)) {
+      return FALSE;
+    }
+    return [$option];
   }
 
 }

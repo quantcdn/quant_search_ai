@@ -4,5 +4,6 @@ services:
     arguments:
       - '@quantsearch_ai.indexing'
       - '@quantsearch_ai.client'
+      - '@quantsearch_ai.site_resolver'
     tags:
       - { name: drush.command }

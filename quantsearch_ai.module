@@ -5,6 +5,7 @@
  * Primary module hooks for QuantSearch AI module.
  */
 
+use Drupal\Core\Entity\EntityInterface;
 use Drupal\Core\Routing\RouteMatchInterface;
 use Drupal\node\NodeInterface;
 
@@ -40,11 +41,34 @@ function quantsearch_ai_node_insert(NodeInterface $node) {
  * Implements hook_node_update().
  */
 function quantsearch_ai_node_update(NodeInterface $node) {
-  $config = \Drupal::config('quantsearch_ai.settings');
-
-  // If node was unpublished, delete from index
+  // If node was unpublished, delete from index. On multilingual sites we must
+  // only delete the affected translation — the legacy delete path fans out
+  // across every translation, which would drop still-published translations
+  // from their language-specific sites.
   if (!$node->isPublished() && isset($node->original) && $node->original->isPublished()) {
-    _quantsearch_ai_delete_node($node);
+    /** @var \Drupal\quantsearch_ai\Service\SiteResolver $resolver */
+    $resolver = \Drupal::service('quantsearch_ai.site_resolver');
+    if ($resolver->isMultilingual()) {
+      if (!_quantsearch_ai_is_configured()) {
+        return;
+      }
+      /** @var \Drupal\quantsearch_ai\Service\IndexingService $indexing */
+      $indexing = \Drupal::service('quantsearch_ai.indexing');
+      $langcode = $node->language()->getId();
+      try {
+        $indexing->deleteNodeLanguage($node, $langcode);
+      }
+      catch (\Exception $e) {
+        \Drupal::logger('quantsearch_ai')->error('Failed to delete unpublished node @nid lang=@lang: @msg', [
+          '@nid' => $node->id(),
+          '@lang' => $langcode,
+          '@msg' => $e->getMessage(),
+        ]);
+      }
+    }
+    else {
+      _quantsearch_ai_delete_node($node);
+    }
   }
   else {
     _quantsearch_ai_index_node($node, 'update');
@@ -56,6 +80,131 @@ function quantsearch_ai_node_update(NodeInterface $node) {
  */
 function quantsearch_ai_node_delete(NodeInterface $node) {
   _quantsearch_ai_delete_node($node);
+}
+
+/**
+ * Implements hook_entity_translation_insert().
+ *
+ * Fires when a translation is added to an existing translatable entity.
+ * The default translation is handled by hook_node_insert/update; we only
+ * act on additional language translations here so we can push just the
+ * changed language rather than re-indexing every translation.
+ */
+function quantsearch_ai_entity_translation_insert(EntityInterface $translation) {
+  if (!$translation instanceof NodeInterface) {
+    return;
+  }
+  _quantsearch_ai_index_translation($translation, 'insert');
+}
+
+/**
+ * Implements hook_entity_translation_update().
+ *
+ * Fires when an existing translation is updated. The default translation is
+ * already covered by hook_node_update(); we only handle non-default
+ * translations here so each translation update only touches its own language
+ * site (rather than fanning out across all translations).
+ */
+function quantsearch_ai_entity_translation_update(EntityInterface $translation) {
+  if (!$translation instanceof NodeInterface) {
+    return;
+  }
+  // Default translation is owned by hook_node_update; skip here.
+  if ($translation->isDefaultTranslation()) {
+    return;
+  }
+  _quantsearch_ai_index_translation($translation, 'update');
+}
+
+/**
+ * Implements hook_entity_translation_delete().
+ *
+ * Fires when a translation is removed from a translatable entity.
+ */
+function quantsearch_ai_entity_translation_delete(EntityInterface $translation) {
+  if (!$translation instanceof NodeInterface) {
+    return;
+  }
+  // Default translation removal is handled by hook_node_delete.
+  if ($translation->isDefaultTranslation()) {
+    return;
+  }
+
+  if (!_quantsearch_ai_is_configured()) {
+    return;
+  }
+
+  /** @var \Drupal\quantsearch_ai\Service\IndexingService $indexing */
+  $indexing = \Drupal::service('quantsearch_ai.indexing');
+  $langcode = $translation->language()->getId();
+  try {
+    $indexing->deleteNodeLanguage($translation, $langcode);
+  }
+  catch (\Exception $e) {
+    \Drupal::logger('quantsearch_ai')->error('Failed to delete translation @nid:@lang: @msg', [
+      '@nid' => $translation->id(),
+      '@lang' => $langcode,
+      '@msg' => $e->getMessage(),
+    ]);
+  }
+}
+
+/**
+ * Index a single translation of a node to QuantSearch.
+ *
+ * @param \Drupal\node\NodeInterface $translation
+ *   The translation entity (already in the target language).
+ * @param string $operation
+ *   The operation type (insert, update).
+ */
+function _quantsearch_ai_index_translation(NodeInterface $translation, string $operation) {
+  // Default translation is handled by hook_node_insert/update which fans out
+  // across all translations via IndexingService::indexNode(). Skipping here
+  // prevents double-indexing on initial node creation.
+  if ($translation->isDefaultTranslation()) {
+    return;
+  }
+
+  $config = \Drupal::config('quantsearch_ai.settings');
+  if (!$config->get('indexing.enabled')) {
+    return;
+  }
+  $content_types = $config->get('indexing.content_types') ?: [];
+  if (empty($content_types) || !in_array($translation->bundle(), $content_types)) {
+    return;
+  }
+  if ($config->get('indexing.exclude_unpublished') && !$translation->isPublished()) {
+    return;
+  }
+  if (!_quantsearch_ai_is_configured()) {
+    return;
+  }
+
+  /** @var \Drupal\quantsearch_ai\Service\IndexingService $indexing */
+  $indexing = \Drupal::service('quantsearch_ai.indexing');
+  $langcode = $translation->language()->getId();
+
+  if ($config->get('indexing.realtime')) {
+    try {
+      $indexing->indexNodeLanguage($translation, $langcode);
+    }
+    catch (\Exception $e) {
+      \Drupal::logger('quantsearch_ai')->error('Failed to index translation @nid:@lang: @msg', [
+        '@nid' => $translation->id(),
+        '@lang' => $langcode,
+        '@msg' => $e->getMessage(),
+      ]);
+    }
+  }
+  else {
+    /** @var \Drupal\Core\Queue\QueueFactory $queueFactory */
+    $queueFactory = \Drupal::service('queue');
+    $queueFactory->get('quantsearch_content_index')->createItem([
+      'nid' => $translation->id(),
+      'langcode' => $langcode,
+      'operation' => 'index',
+    ]);
+  }
 }
 
 /**
@@ -86,17 +235,27 @@ function _quantsearch_ai_index_node(NodeInterface $node, string $operation) {
   }
 
   // Check if we have a valid connection
-  if (!$config->get('api_key_id') || !$config->get('site_id')) {
+  if (!_quantsearch_ai_is_configured()) {
     return;
   }
 
   /** @var \Drupal\quantsearch_ai\Service\IndexingService $indexing */
   $indexing = \Drupal::service('quantsearch_ai.indexing');
+  /** @var \Drupal\quantsearch_ai\Service\SiteResolver $resolver */
+  $resolver = \Drupal::service('quantsearch_ai.site_resolver');
 
   // Real-time or queued indexing
   if ($config->get('indexing.realtime')) {
     try {
-      $indexing->indexNode($node);
+      if ($resolver->isMultilingual()) {
+        // On multilingual sites only re-index the language being saved.
+        // Non-default translations are covered by
+        // hook_entity_translation_insert/update so we don't need to fan out.
+        $indexing->indexNodeLanguage($node, $node->language()->getId());
+      }
+      else {
+        $indexing->indexNode($node);
+      }
     }
     catch (\Exception $e) {
       \Drupal::logger('quantsearch_ai')->error('Failed to index node @nid: @message', [
@@ -106,7 +265,8 @@ function _quantsearch_ai_index_node(NodeInterface $node, string $operation) {
     }
   }
   else {
-    // Queue for batch processing
+    // Queue for batch processing. queueNode() already enqueues per-language
+    // items on multilingual sites.
     $indexing->queueNode($node);
   }
 }
@@ -118,10 +278,8 @@ function _quantsearch_ai_index_node(NodeInterface $node, string $operation) {
  *   The node to delete.
  */
 function _quantsearch_ai_delete_node(NodeInterface $node) {
-  $config = \Drupal::config('quantsearch_ai.settings');
-
   // Check if we have a valid connection
-  if (!$config->get('api_key_id') || !$config->get('site_id')) {
+  if (!_quantsearch_ai_is_configured()) {
     return;
   }
 
@@ -140,11 +298,35 @@ function _quantsearch_ai_delete_node(NodeInterface $node) {
 }
 
 /**
+ * Returns TRUE when the module has at least one usable QuantSearch target.
+ *
+ * The module is considered configured when an API key is present AND either
+ * a flat `site_id` is set OR a `language_sites` map is populated. This allows
+ * fully-migrated multilingual installs (which may never set the flat
+ * `site_id`) to keep functioning.
+ *
+ * @return bool
+ *   TRUE when the module has a usable target configuration.
+ */
+function _quantsearch_ai_is_configured(): bool {
+  $config = \Drupal::config('quantsearch_ai.settings');
+  if (!$config->get('api_key_id')) {
+    return FALSE;
+  }
+  /** @var \Drupal\quantsearch_ai\Service\SiteResolver $resolver */
+  $resolver = \Drupal::service('quantsearch_ai.site_resolver');
+  return $resolver->isMultilingual() || !empty($config->get('site_id'));
+}
+
+/**
  * Implements hook_page_attachments().
  */
 function quantsearch_ai_page_attachments(array &$attachments) {
   $config = \Drupal::config('quantsearch_ai.settings');
-  $site_id = $config->get('site_id');
+  /** @var \Drupal\quantsearch_ai\Service\SiteResolver $resolver */
+  $resolver = \Drupal::service('quantsearch_ai.site_resolver');
+  $langcode = \Drupal::languageManager()->getCurrentLanguage()->getId();
+  $site_id = $resolver->getSiteId($langcode);
 
   if (!$site_id) {
     return;
@@ -153,7 +335,9 @@ function quantsearch_ai_page_attachments(array &$attachments) {
   // Attach chat widget settings if enabled globally (script added in hook_page_bottom)
   if ($config->get('widgets.chat.enabled')) {
     $attachments['#attached']['drupalSettings']['quantsearch_ai']['chat_enabled'] = TRUE;
+    $attachments['#attached']['drupalSettings']['quantsearch_ai']['site_id'] = $site_id;
   }
+  $attachments['#cache']['contexts'][] = 'languages:language_interface';
 }
 
 /**
@@ -163,7 +347,10 @@ function quantsearch_ai_page_attachments(array &$attachments) {
  */
 function quantsearch_ai_page_bottom(array &$page_bottom) {
   $config = \Drupal::config('quantsearch_ai.settings');
-  $site_id = $config->get('site_id');
+  /** @var \Drupal\quantsearch_ai\Service\SiteResolver $resolver */
+  $resolver = \Drupal::service('quantsearch_ai.site_resolver');
+  $langcode = \Drupal::languageManager()->getCurrentLanguage()->getId();
+  $site_id = $resolver->getSiteId($langcode);
   $cdn_url = $config->get('cdn_url') ?: 'https://cdn.quantsearch.ai/v1';
 
   if (!$site_id) {
@@ -192,6 +379,7 @@ function quantsearch_ai_page_bottom(array &$page_bottom) {
       '#tag' => 'script',
       '#attributes' => $attributes,
       '#cache' => [
+        'contexts' => ['languages:language_interface'],
         'tags' => ['config:quantsearch_ai.settings'],
       ],
     ];
