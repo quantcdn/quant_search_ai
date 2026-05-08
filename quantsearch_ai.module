@@ -248,10 +248,19 @@ function _quantsearch_ai_index_node(NodeInterface $node, string $operation) {
   if ($config->get('indexing.realtime')) {
     try {
       if ($resolver->isMultilingual()) {
-        // On multilingual sites only re-index the language being saved.
-        // Non-default translations are covered by
-        // hook_entity_translation_insert/update so we don't need to fan out.
-        $indexing->indexNodeLanguage($node, $node->language()->getId());
+        if ($operation === 'insert') {
+          // Brand new node: index every translation. hook_entity_translation_insert
+          // does not fire for translations created alongside the parent in a single
+          // save, so we have to fan out here.
+          $indexing->indexNode($node);
+        }
+        elseif ($node->isDefaultTranslation()) {
+          // Update of the default translation: index only the saved language.
+          // Non-default translation updates fire hook_entity_translation_update.
+          $indexing->indexNodeLanguage($node, $node->language()->getId());
+        }
+        // else: non-default translation update — hook_entity_translation_update
+        // handles it. Skip here to avoid double-indexing.
       }
       else {
         $indexing->indexNode($node);
@@ -265,9 +274,27 @@ function _quantsearch_ai_index_node(NodeInterface $node, string $operation) {
     }
   }
   else {
-    // Queue for batch processing. queueNode() already enqueues per-language
-    // items on multilingual sites.
-    $indexing->queueNode($node);
+    // Queue for batch processing.
+    if ($resolver->isMultilingual()) {
+      if ($operation === 'insert') {
+        // Brand new node: enqueue every translation. queueNode handles fan-out.
+        $indexing->queueNode($node);
+      }
+      elseif ($node->isDefaultTranslation()) {
+        // Update of the default translation: enqueue only that language.
+        $queueFactory = \Drupal::service('queue');
+        $queueFactory->get('quantsearch_content_index')->createItem([
+          'nid' => $node->id(),
+          'langcode' => $node->language()->getId(),
+          'operation' => 'index',
+        ]);
+      }
+      // else: non-default translation update; hook_entity_translation_update
+      // already queued the change.
+    }
+    else {
+      $indexing->queueNode($node);
+    }
   }
 }
 
