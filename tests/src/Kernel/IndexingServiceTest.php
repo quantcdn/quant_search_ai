@@ -204,4 +204,36 @@ class IndexingServiceTest extends KernelTestBase {
     $queue->deleteItem($item);
   }
 
+  public function testNodeToPagesSkipsUnpublishedTranslations(): void {
+    \Drupal::configFactory()->getEditable('quantsearch_ai.settings')
+      ->set('indexing.exclude_unpublished', TRUE)
+      ->save();
+
+    $node = $this->createNode(['type' => 'page', 'title' => 'Hello', 'langcode' => 'en']);
+    $fr = $node->addTranslation('fr', ['title' => 'Bonjour']);
+    $fr->setUnpublished()->save();
+
+    $service = \Drupal::service('quantsearch_ai.indexing');
+    $pages = $service->nodeToPages($node);
+
+    $this->assertCount(1, $pages);
+    $this->assertSame('en', $pages[0]['langcode']);
+  }
+
+  public function testDeleteNodeReturnsFalseWhenSingleLanguageClientRejects(): void {
+    \Drupal::configFactory()->getEditable('quantsearch_ai.settings')
+      ->clear('language_sites')
+      ->save();
+
+    $node = $this->createNode(['type' => 'page', 'title' => 'Hello']);
+    $client = $this->createMock(\Drupal\quantsearch_ai\Client\QuantSearchClient::class);
+    $client->method('deletePagesByKey')->willReturn(FALSE);
+    $client->method('deletePages')->willReturn(FALSE);
+
+    $this->container->set('quantsearch_ai.client', $client);
+    $service = \Drupal::service('quantsearch_ai.indexing');
+
+    $this->assertFalse($service->deleteNode($node));
+  }
+
 }

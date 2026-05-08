@@ -450,29 +450,33 @@ class SettingsForm extends ConfigFormBase {
     $config->set('widgets.chat.placeholder', $form_state->getValue('chat_placeholder'));
     $config->set('widgets.chat.greeting', $form_state->getValue('chat_greeting'));
 
-    // Multi-language site mapping. Only persist mappings whose chosen site_id
-    // matches a known available site; otherwise drop the row so the language
-    // falls back to the default site_id selected above.
-    $multilingual_input = $form_state->getValue(['multilingual', 'language_sites']) ?? [];
-    $available_sites = $config->get('available_sites') ?: [];
-    $sites_by_id = [];
-    foreach ($available_sites as $site) {
-      $sites_by_id[$site['id']] = $site;
-    }
-
-    $language_map = [];
-    foreach ($multilingual_input as $langcode => $site_id) {
-      if (empty($site_id) || !isset($sites_by_id[$site_id])) {
-        continue;
+    // Multi-language site mapping. Only persist when the multilingual section
+    // was actually rendered (which produces an array form value). If only one
+    // language is enabled, or only one site is available, the section is
+    // skipped and getValue() returns NULL — in that case do NOT touch
+    // language_sites or we would clobber a previously-saved mapping.
+    $multilingual_input = $form_state->getValue(['multilingual', 'language_sites']);
+    if (is_array($multilingual_input)) {
+      $available_sites = $config->get('available_sites') ?: [];
+      $sites_by_id = [];
+      foreach ($available_sites as $site) {
+        $sites_by_id[$site['id']] = $site;
       }
-      $language_map[$langcode] = [
-        'site_id' => $site_id,
-        'site_name' => $sites_by_id[$site_id]['name'] ?? '',
-        'base_url' => $sites_by_id[$site_id]['baseUrl'] ?? '',
-      ];
-    }
 
-    $config->set('language_sites', $language_map);
+      $language_map = [];
+      foreach ($multilingual_input as $langcode => $site_id) {
+        if (empty($site_id) || !isset($sites_by_id[$site_id])) {
+          continue;
+        }
+        $language_map[$langcode] = [
+          'site_id' => $site_id,
+          'site_name' => $sites_by_id[$site_id]['name'] ?? '',
+          'base_url' => $sites_by_id[$site_id]['baseUrl'] ?? '',
+        ];
+      }
+
+      $config->set('language_sites', $language_map);
+    }
 
     $config->save();
 

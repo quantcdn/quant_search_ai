@@ -305,17 +305,27 @@ class IndexingService {
       // Legacy single-site behaviour preserved.
       $key = 'node:' . $node->id();
       try {
-        // Try key-based delete first — matches the 'key' field set during ingest.
-        if (!$this->client->deletePagesByKey([$key])) {
-          // Fall back to URL-based delete for backward compatibility (older
-          // documents may not have been indexed with a key).
+        // Try key-based delete first — matches the 'key' field set during
+        // ingest. Fall back to URL-based delete for backward compatibility
+        // (older documents may not have been indexed with a key). Track the
+        // actual client result so callers can react to backend rejection
+        // rather than always seeing a TRUE.
+        $result = $this->client->deletePagesByKey([$key]);
+        if (!$result) {
           $url = $node->toUrl('canonical')->toString();
-          $this->client->deletePages([$url]);
+          $result = $this->client->deletePages([$url]);
         }
-        $this->logger->info('Deleted node @nid from QuantSearch index.', [
-          '@nid' => $node->id(),
-        ]);
-        return TRUE;
+        if ($result) {
+          $this->logger->info('Deleted node @nid from QuantSearch index.', [
+            '@nid' => $node->id(),
+          ]);
+        }
+        else {
+          $this->logger->warning('Backend rejected delete for node @nid.', [
+            '@nid' => $node->id(),
+          ]);
+        }
+        return (bool) $result;
       }
       catch (\Exception $e) {
         $this->logger->error('Failed to delete node @nid from index: @message', [
@@ -561,10 +571,20 @@ class IndexingService {
       return $results;
     }
 
+    $config = $this->configFactory->get('quantsearch_ai.settings');
+    $exclude_unpublished = (bool) $config->get('indexing.exclude_unpublished');
+
     foreach ($node->getTranslationLanguages() as $language) {
       $langcode = $language->getId();
       if (!in_array($langcode, $mapped, TRUE)) {
         // Skip languages with no mapped site.
+        continue;
+      }
+      $translation = $node->getTranslation($langcode);
+      // Honour exclude_unpublished per translation: each translation has its
+      // own published flag, so an unpublished French version must not leak
+      // into the French site even when the English default is published.
+      if ($exclude_unpublished && !$translation->isPublished()) {
         continue;
       }
       $results[] = [
@@ -620,9 +640,11 @@ class IndexingService {
     // Clean up the HTML - remove scripts, styles, comments, nav elements
     $content = $this->cleanHtml($content);
 
-    // Extract tags from taxonomy fields (auto-detect)
+    // Extract tags from taxonomy fields (auto-detect). Use the per-language
+    // render target so translatable taxonomy references resolve in the right
+    // language.
     $tags = [];
-    foreach ($node->getFields() as $field_name => $field) {
+    foreach ($render_target->getFields() as $field_name => $field) {
       $field_def = $field->getFieldDefinition();
       if ($field_def->getType() === 'entity_reference') {
         $settings = $field_def->getSettings();
@@ -654,7 +676,7 @@ class IndexingService {
       $metadataKey = $mapping['metadata_key'] ?? '';
       $fieldType = $mapping['type'] ?? 'string';
 
-      if (empty($drupalField) || empty($metadataKey) || !$node->hasField($drupalField)) {
+      if (empty($drupalField) || empty($metadataKey) || !$render_target->hasField($drupalField)) {
         continue;
       }
 
@@ -666,7 +688,7 @@ class IndexingService {
         continue;
       }
 
-      $field = $node->get($drupalField);
+      $field = $render_target->get($drupalField);
       if ($field->isEmpty()) {
         continue;
       }
