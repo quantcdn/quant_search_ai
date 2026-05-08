@@ -362,10 +362,17 @@ class IndexingService {
    *
    * Clears the existing queue first to prevent duplicates.
    *
+   * @param string|null $langcode
+   *   Optional Drupal langcode to limit indexing to a specific language.
+   *   When NULL (the default), one fan-out queue item is enqueued per node
+   *   and the queue worker indexes all mapped languages. When a langcode is
+   *   provided, it is stamped on the queue payload so the worker only
+   *   indexes that language's translation (skipping nodes that lack it).
+   *
    * @return int
    *   The number of nodes queued.
    */
-  public function queueFullIndex(): int {
+  public function queueFullIndex(?string $langcode = NULL): int {
     $config = $this->configFactory->get('quantsearch_ai.settings');
     $content_types = $config->get('indexing.content_types') ?: [];
 
@@ -386,10 +393,14 @@ class IndexingService {
     $nids = $query->execute();
 
     foreach ($nids as $nid) {
-      $queue->createItem([
+      $payload = [
         'nid' => $nid,
         'operation' => 'index',
-      ]);
+      ];
+      if ($langcode !== NULL) {
+        $payload['langcode'] = $langcode;
+      }
+      $queue->createItem($payload);
     }
 
     $this->logger->info('Queued @count nodes for full re-index.', [
