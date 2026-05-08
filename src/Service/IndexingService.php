@@ -455,84 +455,122 @@ class IndexingService {
   public function processQueue(int $limit = 50): int {
     $config = $this->configFactory->get('quantsearch_ai.settings');
     $batch_size = $config->get('indexing.batch_size') ?: 50;
+    $multilingual = $this->siteResolver->isMultilingual();
 
     $queue = $this->queueFactory->get('quantsearch_content_index');
     $processed = 0;
-    $pages = [];
-    $items_to_ingest = [];
-    $items_to_skip = [];
 
-    // Collect items up to batch_size
-    while ($processed < $limit && count($pages) < $batch_size && $item = $queue->claimItem()) {
+    // Group pages by langcode so we send one batch per language site.
+    // The empty string key represents "no langcode" (single-language install
+    // or legacy queue items) — these go to the flat site.
+    $batches = [];
+    $items_by_lang = [];
+    $items_to_skip = [];
+    $total_collected = 0;
+
+    while ($processed < $limit && $total_collected < $batch_size && $item = $queue->claimItem()) {
       $data = $item->data;
 
       if (($data['operation'] ?? 'index') === 'delete') {
-        // Handle deletes immediately
+        // Handle deletes immediately (rare path; queueNode produces 'index' items).
         $node = $this->entityTypeManager->getStorage('node')->load($data['nid']);
         if ($node) {
-          $this->deleteNode($node);
+          if (!empty($data['langcode'])) {
+            $this->deleteNodeLanguage($node, $data['langcode']);
+          }
+          else {
+            $this->deleteNode($node);
+          }
         }
         $queue->deleteItem($item);
         $processed++;
         continue;
       }
 
-      // Load node and convert to page
       $node = $this->entityTypeManager->getStorage('node')->load($data['nid']);
-      if ($node && $this->shouldIndex($node)) {
-        $pages[] = $this->nodeToPage($node);
-        $items_to_ingest[] = $item;
-      }
-      else {
-        // Node doesn't exist or shouldn't be indexed - skip it
+      if (!$node || !$this->shouldIndex($node)) {
         $this->logger->notice('Skipping node @nid - not found or not indexable.', [
           '@nid' => $data['nid'],
         ]);
         $items_to_skip[] = $item;
+        continue;
+      }
+
+      $item_lang = $data['langcode'] ?? NULL;
+
+      // Bare items (no langcode) on a multilingual site fan out to every mapped
+      // translation; each becomes a separate page in the appropriate language batch.
+      if ($item_lang === NULL && $multilingual) {
+        foreach ($this->nodeToPages($node) as $entry) {
+          $key = $entry['langcode'];
+          $batches[$key][] = $entry['page'];
+          $total_collected++;
+        }
+        $items_by_lang['__shared__'][] = $item;
+      }
+      elseif ($item_lang !== NULL) {
+        // Per-language item — convert just that translation.
+        if (!$node->hasTranslation($item_lang)) {
+          $items_to_skip[] = $item;
+          continue;
+        }
+        if ($multilingual && !in_array($item_lang, $this->siteResolver->getMappedLanguages(), TRUE)) {
+          // Language is not mapped to a QuantSearch site; drop it.
+          $items_to_skip[] = $item;
+          continue;
+        }
+        $batches[$item_lang][] = $this->nodeToPage($node, $multilingual ? $item_lang : NULL);
+        $items_by_lang[$item_lang][] = $item;
+        $total_collected++;
+      }
+      else {
+        // Single-language site, bare item — legacy path.
+        $batches[''][] = $this->nodeToPage($node, NULL);
+        $items_by_lang[''][] = $item;
+        $total_collected++;
       }
     }
 
-    // Delete skipped items from queue
     foreach ($items_to_skip as $item) {
       $queue->deleteItem($item);
       $processed++;
     }
 
-    // Batch ingest pages
-    if (!empty($pages)) {
+    foreach ($batches as $langcode => $pages) {
+      if (empty($pages)) {
+        continue;
+      }
+      $passLang = $langcode === '' ? NULL : $langcode;
       try {
-        $this->logger->info('Sending @count pages to QuantSearch API.', [
+        $this->logger->info('Sending @count pages to QuantSearch API for lang=@lang.', [
           '@count' => count($pages),
+          '@lang' => $passLang ?? 'default',
         ]);
-
-        // Use wait=false (fire-and-forget) to avoid timeouts
-        // The API will process pages asynchronously
-        $result = $this->client->ingestPages($pages, FALSE);
-
-        $this->logger->info('Submitted @count pages to QuantSearch (async processing).', [
+        $this->client->ingestPages($pages, FALSE, $passLang);
+        $this->logger->info('Submitted @count pages to QuantSearch lang=@lang (async processing).', [
           '@count' => count($pages),
+          '@lang' => $passLang ?? 'default',
         ]);
-
-        // Mark items as done - they've been successfully submitted
-        foreach ($items_to_ingest as $item) {
-          $queue->deleteItem($item);
-          $processed++;
-        }
       }
       catch (\Exception $e) {
-        $this->logger->error('Batch index failed: @message', [
+        $this->logger->error('Batch index failed for lang=@lang: @message', [
+          '@lang' => $passLang ?? 'default',
           '@message' => $e->getMessage(),
         ]);
+      }
+    }
 
-        // Delete items anyway to prevent infinite retry loop
-        // Failed pages can be re-queued manually via "Queue All Content"
-        foreach ($items_to_ingest as $item) {
-          $queue->deleteItem($item);
-          $processed++;
+    // Delete every claimed-and-attempted item (success or failure) to avoid
+    // infinite retries. The shared-bucket items are deleted once each.
+    $deleted_items = [];
+    foreach ($items_by_lang as $list) {
+      foreach ($list as $item) {
+        if (in_array($item->item_id, $deleted_items, TRUE)) {
+          continue;
         }
-        $this->logger->warning('Removed @count failed items from queue to prevent infinite retry.', [
-          '@count' => count($items_to_ingest),
-        ]);
+        $queue->deleteItem($item);
+        $deleted_items[] = $item->item_id;
+        $processed++;
       }
     }
 
