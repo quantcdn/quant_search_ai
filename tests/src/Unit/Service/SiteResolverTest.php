@@ -94,7 +94,7 @@ class SiteResolverTest extends UnitTestCase {
 
   public function testApiEndpointDefaultsWhenUnset(): void {
     $resolver = $this->buildResolver([]);
-    $this->assertSame('https://quantsearch.ai/api', $resolver->getApiEndpoint());
+    $this->assertSame('https://www.quantsearch.ai/api', $resolver->getApiEndpoint());
   }
 
   public function testApiEndpointReturnsConfiguredValue(): void {

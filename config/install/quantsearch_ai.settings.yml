@@ -5,7 +5,7 @@ site_id: ''
 site_name: ''
 base_url: ''
 available_sites: []
-api_endpoint: 'https://quantsearch.ai/api'
+api_endpoint: 'https://www.quantsearch.ai/api'
 cdn_url: 'https://cdn.quantsearch.ai/v1'
 indexing:
   enabled: true

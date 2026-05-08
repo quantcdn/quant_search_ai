@@ -125,7 +125,7 @@ class AuthService {
     }
 
     $config = $this->configFactory->get('quantsearch_ai.settings');
-    $api_endpoint = $config->get('api_endpoint') ?: 'https://quantsearch.ai/api';
+    $api_endpoint = $config->get('api_endpoint') ?: 'https://www.quantsearch.ai/api';
 
     try {
       $response = $this->httpClient->get($api_endpoint . '/sites', [

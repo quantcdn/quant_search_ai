@@ -89,7 +89,7 @@ class OAuthController extends ControllerBase {
 
     // Get API endpoint from config
     $config = $this->configFactory->get('quantsearch_ai.settings');
-    $api_endpoint = $config->get('api_endpoint') ?: 'https://quantsearch.ai/api';
+    $api_endpoint = $config->get('api_endpoint') ?: 'https://www.quantsearch.ai/api';
 
     // Build authorization URL
     $auth_url = $api_endpoint . '/auth/oauth/authorize?' . http_build_query([
@@ -147,7 +147,7 @@ class OAuthController extends ControllerBase {
       ])->toString();
 
       $config = $this->configFactory->get('quantsearch_ai.settings');
-      $api_endpoint = $config->get('api_endpoint') ?: 'https://quantsearch.ai/api';
+      $api_endpoint = $config->get('api_endpoint') ?: 'https://www.quantsearch.ai/api';
 
       $response = $this->httpClient->post($api_endpoint . '/auth/oauth/token', [
         'form_params' => [

@@ -37,7 +37,7 @@ class SiteResolver {
    */
   public function getApiEndpoint(): string {
     $config = $this->configFactory->get('quantsearch_ai.settings');
-    return $config->get('api_endpoint') ?: 'https://quantsearch.ai/api';
+    return $config->get('api_endpoint') ?: 'https://www.quantsearch.ai/api';
   }
 
   /**
