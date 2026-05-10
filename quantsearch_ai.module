@@ -97,24 +97,11 @@ function quantsearch_ai_entity_translation_insert(EntityInterface $translation) 
   _quantsearch_ai_index_translation($translation, 'insert');
 }
 
-/**
- * Implements hook_entity_translation_update().
- *
- * Fires when an existing translation is updated. The default translation is
- * already covered by hook_node_update(); we only handle non-default
- * translations here so each translation update only touches its own language
- * site (rather than fanning out across all translations).
- */
-function quantsearch_ai_entity_translation_update(EntityInterface $translation) {
-  if (!$translation instanceof NodeInterface) {
-    return;
-  }
-  // Default translation is owned by hook_node_update; skip here.
-  if ($translation->isDefaultTranslation()) {
-    return;
-  }
-  _quantsearch_ai_index_translation($translation, 'update');
-}
+// NOTE: hook_entity_translation_update is intentionally NOT implemented.
+// Drupal 11 core's ContentEntityStorageBase::invokeTranslationHooks() only
+// fires translation_insert and translation_delete — never translation_update.
+// Translation edits are handled by hook_node_update() with $node set to the
+// saved translation entity (its language() returns the language being edited).
 
 /**
  * Implements hook_entity_translation_delete().

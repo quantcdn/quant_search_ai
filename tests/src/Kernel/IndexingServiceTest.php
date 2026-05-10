@@ -126,7 +126,7 @@ class IndexingServiceTest extends KernelTestBase {
     $this->assertTrue($service->indexNodeLanguage($node, 'fr'));
   }
 
-  public function testIndexNodeLanguageReturnsFalseForUnmappedLanguage(): void {
+  public function testIndexNodeLanguageRoutesUnmappedLanguageToFlatSite(): void {
     \Drupal::languageManager()->reset();
     \Drupal::service('content_translation.manager')
       ->setEnabled('node', 'page', TRUE);
@@ -134,7 +134,9 @@ class IndexingServiceTest extends KernelTestBase {
     $node = $this->createNode(['type' => 'page', 'title' => 'Hello', 'langcode' => 'en']);
     $node->addTranslation('fr', ['title' => 'Bonjour'])->save();
 
-    // Limit mapped languages to en only — fr is now unmapped.
+    // Limit mapped languages to en only — fr is now unmapped and should
+    // fall back to the flat site_id (matches the settings form's documented
+    // behaviour: "Leave a language unset to fall back to the default site").
     \Drupal::configFactory()->getEditable('quantsearch_ai.settings')
       ->set('language_sites', [
         'en' => ['site_id' => 'en-site', 'base_url' => '/en'],
@@ -142,11 +144,20 @@ class IndexingServiceTest extends KernelTestBase {
       ->save();
 
     $client = $this->createMock(\Drupal\quantsearch_ai\Client\QuantSearchClient::class);
-    $client->expects($this->never())->method('ingestPages');
+    // Unmapped fr translation still ingests once. The client receives langcode='fr'
+    // and SiteResolver::getSiteId('fr') falls back to the flat site_id at the
+    // client layer — that fallback is exercised in SiteResolverTest.
+    $client->expects($this->once())
+      ->method('ingestPages')
+      ->willReturnCallback(function (array $pages, ?bool $wait, ?string $langcode) {
+        $this->assertSame('fr', $langcode);
+        $this->assertSame('Bonjour', $pages[0]['title']);
+        return ['queued' => TRUE];
+      });
 
     $this->container->set('quantsearch_ai.client', $client);
     $service = \Drupal::service('quantsearch_ai.indexing');
-    $this->assertFalse($service->indexNodeLanguage($node, 'fr'));
+    $this->assertTrue($service->indexNodeLanguage($node, 'fr'));
   }
 
   public function testDeleteNodeLanguageDeletesSelectedLanguageOnly(): void {
@@ -168,7 +179,7 @@ class IndexingServiceTest extends KernelTestBase {
     $this->assertTrue($service->deleteNodeLanguage($node, 'fr'));
   }
 
-  public function testQueueNodeEnqueuesOnePerMappedLanguage(): void {
+  public function testQueueNodeEnqueuesOnePerTranslation(): void {
     $node = $this->createNode(['type' => 'page', 'title' => 'Hello', 'langcode' => 'en']);
     $node->addTranslation('fr', ['title' => 'Bonjour'])->save();
 
@@ -187,6 +198,27 @@ class IndexingServiceTest extends KernelTestBase {
     }
     sort($seenLangs);
     $this->assertSame(['en', 'fr'], $seenLangs);
+  }
+
+  public function testQueueNodeEnqueuesUnmappedTranslations(): void {
+    // Map only English. French and Spanish should still queue and fall back
+    // to the flat site at ingest time.
+    \Drupal::configFactory()->getEditable('quantsearch_ai.settings')
+      ->set('language_sites', [
+        'en' => ['site_id' => 'en-site', 'base_url' => '/en'],
+      ])
+      ->save();
+
+    \Drupal::languageManager()->reset();
+    \Drupal::service('content_translation.manager')
+      ->setEnabled('node', 'page', TRUE);
+
+    $node = $this->createNode(['type' => 'page', 'title' => 'Hello', 'langcode' => 'en']);
+    $node->addTranslation('fr', ['title' => 'Bonjour'])->save();
+
+    \Drupal::service('quantsearch_ai.indexing')->queueNode($node);
+    $queue = \Drupal::service('queue')->get('quantsearch_content_index');
+    $this->assertSame(2, $queue->numberOfItems(), 'Both mapped en and unmapped fr should queue.');
   }
 
   public function testQueueNodeOmitsLangcodeWhenNotMultilingual(): void {

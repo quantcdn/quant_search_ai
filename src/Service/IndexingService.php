@@ -184,10 +184,9 @@ class IndexingService {
     if (!$node->hasTranslation($langcode)) {
       return FALSE;
     }
-    if ($this->siteResolver->isMultilingual()
-        && !in_array($langcode, $this->siteResolver->getMappedLanguages(), TRUE)) {
-      return FALSE;
-    }
+    // Always thread the langcode through. SiteResolver routes unmapped
+    // languages to the flat site_id (matches the settings form's documented
+    // fallback: "Leave a language unset to fall back to the default site").
     $passLang = $this->siteResolver->isMultilingual() ? $langcode : NULL;
     $page = $this->nodeToPage($node, $passLang);
     try {
@@ -275,19 +274,12 @@ class IndexingService {
       return;
     }
 
-    $mapped = $this->siteResolver->getMappedLanguages();
+    // Enqueue every translation. Mapped languages route to their site;
+    // unmapped languages fall back to the flat site via SiteResolver.
     foreach ($node->getTranslationLanguages() as $language) {
-      $langcode = $language->getId();
-      if (!in_array($langcode, $mapped, TRUE)) {
-        $this->logger->debug('Skipping translation @nid lang=@lang: no QuantSearch site mapped for this language.', [
-          '@nid' => $node->id(),
-          '@lang' => $langcode,
-        ]);
-        continue;
-      }
       $queue->createItem([
         'nid' => $node->id(),
-        'langcode' => $langcode,
+        'langcode' => $language->getId(),
         'operation' => 'index',
       ]);
     }
@@ -343,10 +335,8 @@ class IndexingService {
     $allOk = TRUE;
     foreach ($node->getTranslationLanguages() as $language) {
       $langcode = $language->getId();
-      if (!in_array($langcode, $this->siteResolver->getMappedLanguages(), TRUE)) {
-        // Skip languages with no mapped site.
-        continue;
-      }
+      // Delete every translation. Mapped languages hit their mapped site;
+      // unmapped languages fall back to the flat site via SiteResolver.
       $key = 'node:' . $node->id() . ':' . $langcode;
       try {
         $translation = $node->getTranslation($langcode);
@@ -509,13 +499,9 @@ class IndexingService {
         $items_by_lang['__shared__'][] = $item;
       }
       elseif ($item_lang !== NULL) {
-        // Per-language item — convert just that translation.
+        // Per-language item — convert just that translation. Unmapped
+        // languages still index, routed to the flat site via SiteResolver.
         if (!$node->hasTranslation($item_lang)) {
-          $items_to_skip[] = $item;
-          continue;
-        }
-        if ($multilingual && !in_array($item_lang, $this->siteResolver->getMappedLanguages(), TRUE)) {
-          // Language is not mapped to a QuantSearch site; drop it.
           $items_to_skip[] = $item;
           continue;
         }
@@ -618,14 +604,6 @@ class IndexingService {
 
     foreach ($node->getTranslationLanguages() as $language) {
       $langcode = $language->getId();
-      if (!in_array($langcode, $mapped, TRUE)) {
-        // Skip languages with no mapped site.
-        $this->logger->debug('Skipping translation @nid lang=@lang: no QuantSearch site mapped for this language.', [
-          '@nid' => $node->id(),
-          '@lang' => $langcode,
-        ]);
-        continue;
-      }
       $translation = $node->getTranslation($langcode);
       // Honour exclude_unpublished per translation: each translation has its
       // own published flag, so an unpublished French version must not leak
@@ -633,10 +611,14 @@ class IndexingService {
       if ($exclude_unpublished && !$translation->isPublished()) {
         continue;
       }
+      // Always include every translation. Mapped languages route to their
+      // mapped QuantSearch site; unmapped languages fall back to the flat
+      // site via SiteResolver. The langcode is preserved on the page so the
+      // render uses the translation's title/URL/content and the document key
+      // includes the langcode (preventing collisions when multiple unmapped
+      // languages share the flat site).
       $results[] = [
         'langcode' => $langcode,
-        // Pass the original node + langcode; nodeToPage() resolves the
-        // translation itself.
         'page' => $this->nodeToPage($node, $langcode),
       ];
     }
