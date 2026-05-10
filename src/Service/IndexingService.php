@@ -188,7 +188,28 @@ class IndexingService {
     // languages to the flat site_id (matches the settings form's documented
     // fallback: "Leave a language unset to fall back to the default site").
     $passLang = $this->siteResolver->isMultilingual() ? $langcode : NULL;
-    $page = $this->nodeToPage($node, $passLang);
+    try {
+      $page = $this->nodeToPage($node, $passLang);
+    }
+    catch (\InvalidArgumentException $e) {
+      // Lazy builders inside the rendered output can throw during in-flight
+      // saves (hook_entity_translation_insert fires inside doPostSave, before
+      // the storage layer has flushed the new translation, so a freshly-loaded
+      // entity inside a lazy builder doesn't yet see this translation). Defer
+      // to the queue — the worker runs after the save completes and renders
+      // cleanly.
+      $this->logger->info('Deferring index for node @nid lang=@lang to queue (in-flight save): @msg', [
+        '@nid' => $node->id(),
+        '@lang' => $langcode,
+        '@msg' => $e->getMessage(),
+      ]);
+      $this->queueFactory->get('quantsearch_content_index')->createItem([
+        'nid' => $node->id(),
+        'langcode' => $langcode,
+        'operation' => 'index',
+      ]);
+      return TRUE;
+    }
     try {
       $this->client->ingestPages([$page], FALSE, $passLang);
       $this->logger->info('Indexed node @nid lang=@lang.', [
@@ -646,10 +667,22 @@ class IndexingService {
     $config = $this->configFactory->get('quantsearch_ai.settings');
     $view_mode = $config->get('indexing.view_mode') ?: 'full';
 
+    // Resolve the per-language entity. When this is called from
+    // hook_entity_translation_insert, $node is already the translation entity
+    // being inserted but its internal translation set is mid-save and calling
+    // getTranslation($langcode) on it throws. Detect that case by comparing
+    // the node's current language to the requested langcode; if they already
+    // match, use $node directly.
+    if ($langcode !== NULL && $node->language()->getId() !== $langcode) {
+      $translation = $node->getTranslation($langcode);
+    }
+    else {
+      $translation = $node;
+    }
+
     // URL + title: when multilingual, prefer the language-specific translation
     // so URL aliases and titles come from the right language.
     if ($langcode !== NULL) {
-      $translation = $node->getTranslation($langcode);
       $url = $node->toUrl('canonical', ['language' => $translation->language()])->toString();
       $title = $translation->getTitle();
     }
@@ -658,12 +691,12 @@ class IndexingService {
       $title = $node->getTitle();
     }
 
-    // Render the node (translation when multilingual) using the configured
-    // view mode. Pass the langcode explicitly to view() so the EntityViewBuilder
-    // resolves translatable field values in the requested language. Without it,
-    // Drupal falls back to the request's current content language and a CLI
-    // (drush) save would render every translation in the default language.
-    $render_target = $langcode !== NULL ? $node->getTranslation($langcode) : $node;
+    // Render the (per-language) entity using the configured view mode. Pass the
+    // langcode explicitly to view() so EntityViewBuilder resolves translatable
+    // field values in the requested language. Without it, Drupal falls back to
+    // the request's current content language and a CLI (drush) save would
+    // render every translation in the default language.
+    $render_target = $translation;
     $render_langcode = $langcode ?? $render_target->language()->getId();
     $view_builder = $this->entityTypeManager->getViewBuilder('node');
     $build = $view_builder->view($render_target, $view_mode, $render_langcode);
