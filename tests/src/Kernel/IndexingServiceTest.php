@@ -77,6 +77,34 @@ class IndexingServiceTest extends KernelTestBase {
     $this->assertSame('node:' . $node->id() . ':fr', $byLang['fr']['key']);
   }
 
+  public function testNodeToPagesRendersEachTranslationInItsOwnLanguage(): void {
+    // Regression: previously the EntityViewBuilder rendered every translation
+    // in the request's current content language, so multilingual sites
+    // pushed the default-language body to every per-language QuantSearch site.
+    $node = $this->createNode([
+      'type' => 'page',
+      'title' => 'English title',
+      'body' => ['value' => 'English body content here for the test fixture.', 'format' => 'plain_text'],
+      'langcode' => 'en',
+    ]);
+    $node->addTranslation('fr', [
+      'title' => 'Titre francais',
+      'body' => ['value' => 'Contenu francais du corps pour le fixture.', 'format' => 'plain_text'],
+    ])->save();
+
+    $pages = \Drupal::service('quantsearch_ai.indexing')->nodeToPages($node);
+    $byLang = [];
+    foreach ($pages as $entry) {
+      $byLang[$entry['langcode']] = $entry['page'];
+    }
+
+    $this->assertStringContainsString('English body content', $byLang['en']['content']);
+    $this->assertStringNotContainsString('Contenu francais', $byLang['en']['content']);
+
+    $this->assertStringContainsString('Contenu francais', $byLang['fr']['content']);
+    $this->assertStringNotContainsString('English body content', $byLang['fr']['content']);
+  }
+
   public function testNodeToPagesSinglePageWhenNotMultilingual(): void {
     \Drupal::configFactory()->getEditable('quantsearch_ai.settings')
       ->clear('language_sites')

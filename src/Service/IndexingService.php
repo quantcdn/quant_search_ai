@@ -659,10 +659,14 @@ class IndexingService {
     }
 
     // Render the node (translation when multilingual) using the configured
-    // view mode.
+    // view mode. Pass the langcode explicitly to view() so the EntityViewBuilder
+    // resolves translatable field values in the requested language. Without it,
+    // Drupal falls back to the request's current content language and a CLI
+    // (drush) save would render every translation in the default language.
     $render_target = $langcode !== NULL ? $node->getTranslation($langcode) : $node;
+    $render_langcode = $langcode ?? $render_target->language()->getId();
     $view_builder = $this->entityTypeManager->getViewBuilder('node');
-    $build = $view_builder->view($render_target, $view_mode);
+    $build = $view_builder->view($render_target, $view_mode, $render_langcode);
     $content = (string) $this->renderer->renderPlain($build);
 
     // Clean up the HTML - remove scripts, styles, comments, nav elements
