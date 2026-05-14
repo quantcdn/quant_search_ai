@@ -88,6 +88,24 @@ class SettingsForm extends ConfigFormBase {
     $config = $this->config('quantsearch_ai.settings');
     $connection = $this->authService->getConnectionDetails();
 
+    // Fetch the live site list once and refresh the cached `available_sites`
+    // config so every downstream consumer (Connection dropdown, multi-language
+    // mapping gate, submit-time validation) sees newly-created sites without
+    // needing to disconnect and re-run OAuth. Falls back to the cached list if
+    // the API is unreachable.
+    $available_sites = [];
+    if ($connection['connected']) {
+      try {
+        $available_sites = $this->client->listSites();
+        $editable = $this->configFactory()->getEditable('quantsearch_ai.settings');
+        $editable->set('available_sites', $available_sites)->save();
+      }
+      catch (\Exception $e) {
+        $available_sites = $config->get('available_sites') ?: [];
+        $this->messenger()->addWarning($this->t('Could not fetch sites from QuantSearch. Using cached list.'));
+      }
+    }
+
     // Connection Section
     $form['connection'] = [
       '#type' => 'details',
@@ -103,17 +121,6 @@ class SettingsForm extends ConfigFormBase {
             '@org' => $connection['org_name'] ?: $connection['org_id'],
           ]) . '</div>',
       ];
-
-      // Site selector - fetch live from API
-      $available_sites = [];
-      try {
-        $available_sites = $this->client->listSites();
-      }
-      catch (\Exception $e) {
-        // Fall back to cached sites if API fails
-        $available_sites = $config->get('available_sites') ?: [];
-        $this->messenger()->addWarning($this->t('Could not fetch sites from QuantSearch. Using cached list.'));
-      }
 
       if (count($available_sites) > 0) {
         $site_options = [];
@@ -166,11 +173,12 @@ class SettingsForm extends ConfigFormBase {
     }
 
     // Multi-language site mapping section. Only shown when there is more than
-    // one enabled language and the org has multiple sites available.
+    // one enabled language and the org has multiple sites available. Uses the
+    // live $available_sites fetched above so newly-created sites show up
+    // immediately without re-running OAuth.
     $languages = $this->languageManager->getLanguages();
-    $available_sites_for_map = $config->get('available_sites') ?: [];
 
-    if (count($languages) > 1 && count($available_sites_for_map) > 1) {
+    if (count($languages) > 1 && count($available_sites) > 1) {
       $form['multilingual'] = [
         '#type' => 'details',
         '#title' => $this->t('Multi-language site mapping'),
@@ -180,7 +188,7 @@ class SettingsForm extends ConfigFormBase {
       ];
 
       $site_options = ['' => $this->t('— Use default site —')];
-      foreach ($available_sites_for_map as $site) {
+      foreach ($available_sites as $site) {
         $site_options[$site['id']] = $site['name'] . ' (' . ($site['baseUrl'] ?? $site['id']) . ')';
       }
 
